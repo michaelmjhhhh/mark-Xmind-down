@@ -7,10 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/michaelmjhhhh/mark-Xmind-down/internal/export"
 )
@@ -23,6 +21,9 @@ type listingMsg struct {
 	directory string
 	entries   []browserEntry
 	err       error
+	request   uint64
+	cursor    int
+	offset    int
 }
 type convertedMsg outcome
 type cancelMsg struct{}
@@ -35,21 +36,32 @@ type tuiModel struct {
 	directory                               string
 	entries                                 []browserEntry
 	selected                                map[string]bool
-	cursor, width, height                   int
+	cursor, offset, width, height           int
 	loading, ready, running, done, canceled bool
 	message                                 string
 	jobs                                    []job
 	results                                 []outcome
+	history                                 []outcome
+	picker                                  bool
+	sourceDirectory                         string
+	sourceEntries                           []browserEntry
+	sourceCursor, browserCursor             int
+	sourceOffset, browserOffset             int
+	sourceReady                             bool
+	listingRequest                          uint64
 }
 
-func runTUI(ctx context.Context, paths []string, opts options, stdin io.Reader, stdout io.Writer, convert converter) ([]outcome, bool, error) {
-	directory, err := os.Getwd()
-	if err != nil {
-		return nil, false, fmt.Errorf("open file browser: %w", err)
+func runTUI(ctx context.Context, paths []string, directory string, opts options, stdin io.Reader, stdout io.Writer, convert converter) ([]outcome, bool, error) {
+	if directory == "" {
+		var err error
+		directory, err = os.Getwd()
+		if err != nil {
+			return nil, false, fmt.Errorf("open file browser: %w", err)
+		}
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	m := tuiModel{ctx: workerCtx, cancel: cancel, convert: convert, opts: opts, directory: directory, selected: make(map[string]bool), width: 80, height: 24, ready: len(paths) > 0}
+	m := tuiModel{ctx: workerCtx, cancel: cancel, convert: convert, opts: opts, directory: directory, selected: make(map[string]bool), width: 80, height: 24, ready: len(paths) > 0, loading: len(paths) == 0}
 	for _, path := range paths {
 		m.selected[path] = true
 	}
@@ -60,7 +72,11 @@ func runTUI(ctx context.Context, paths []string, opts options, stdin io.Reader, 
 		return nil, ctx.Err() != nil, err
 	}
 	finished := final.(tuiModel)
-	return finished.results, finished.canceled, nil
+	return finished.allResults(), finished.canceled, nil
+}
+
+func (m tuiModel) allResults() []outcome {
+	return append(append([]outcome(nil), m.history...), m.results...)
 }
 
 func (m tuiModel) Init() tea.Cmd {
@@ -72,10 +88,14 @@ func (m tuiModel) Init() tea.Cmd {
 }
 
 func readDirectory(directory string) tea.Cmd {
+	return readDirectoryEntries(directory, false, 0, 0, 0)
+}
+
+func readDirectoryEntries(directory string, foldersOnly bool, request uint64, cursor, offset int) tea.Cmd {
 	return func() tea.Msg {
 		listing, err := os.ReadDir(directory)
 		if err != nil {
-			return listingMsg{directory: directory, err: err}
+			return listingMsg{directory: directory, err: err, request: request}
 		}
 		var entries []browserEntry
 		parent := filepath.Dir(directory)
@@ -84,7 +104,7 @@ func readDirectory(directory string) tea.Cmd {
 		}
 		for _, entry := range listing {
 			// Symlinks are not followed in the browser, avoiding navigation loops.
-			if entry.IsDir() || (entry.Type().IsRegular() && isXMind(entry.Name())) {
+			if entry.IsDir() || (!foldersOnly && entry.Type().IsRegular() && isXMind(entry.Name())) {
 				entries = append(entries, browserEntry{name: entry.Name(), path: filepath.Join(directory, entry.Name()), directory: entry.IsDir()})
 			}
 		}
@@ -94,8 +114,14 @@ func readDirectory(directory string) tea.Cmd {
 			}
 			return entries[i].name < entries[j].name
 		})
-		return listingMsg{directory: directory, entries: entries}
+		return listingMsg{directory: directory, entries: entries, request: request, cursor: cursor, offset: offset}
 	}
+}
+
+func (m tuiModel) openDirectory(directory string, cursor, offset int) (tea.Model, tea.Cmd) {
+	m.listingRequest++
+	m.loading, m.message = true, ""
+	return m, readDirectoryEntries(directory, m.picker, m.listingRequest, cursor, offset)
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -107,15 +133,23 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.syncViewport(m.rowCount())
 	case listingMsg:
+		// A pending folder read may finish after Esc cancels the output picker.
+		if msg.request != m.listingRequest {
+			return m, nil
+		}
 		m.loading = false
 		if msg.err != nil {
 			m.message = "Cannot open directory: " + safe(msg.err.Error())
 			return m, nil
 		}
-		m.directory, m.entries, m.cursor, m.message = msg.directory, msg.entries, 0, ""
+		m.directory, m.entries, m.cursor, m.offset, m.message = msg.directory, msg.entries, msg.cursor, msg.offset, ""
+		m.syncViewport(len(m.entries))
 	case convertedMsg:
 		m.results = append(m.results, outcome(msg))
+		m.cursor = len(m.results) - 1
+		m.syncViewport(len(m.results))
 		if m.canceled || m.ctx.Err() != nil {
 			m.canceled = true
 			m.running = false
@@ -127,6 +161,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running, m.done = false, true
 	case tea.KeyPressMsg:
 		key := msg.String()
+		if key == "esc" && m.picker {
+			return m.closePicker(false), nil
+		}
 		if key == "ctrl+c" || key == "q" || key == "esc" {
 			if m.running {
 				// Wait for the worker result before leaving; conversion owns its cleanup.
@@ -141,8 +178,35 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.done {
-			if key == "enter" {
+			switch key {
+			case "enter":
 				return m, tea.Quit
+			case "b":
+				m.history = append(m.history, m.results...)
+				m.results, m.jobs = nil, nil
+				m.done, m.ready = false, false
+				m.selected = make(map[string]bool)
+				return m.openDirectory(m.directory, m.browserCursor, m.browserOffset)
+			}
+			m.moveCursor(key, len(m.results))
+			return m, nil
+		}
+		if m.loading {
+			return m, nil
+		}
+		if m.picker {
+			m.moveCursor(key, len(m.entries))
+			switch key {
+			case "space":
+				return m.closePicker(true), nil
+			case "enter", "right", "l":
+				if m.cursor >= 0 && m.cursor < len(m.entries) {
+					return m.openDirectory(m.entries[m.cursor].path, 0, 0)
+				}
+			case "backspace", "left", "h":
+				return m.openDirectory(filepath.Dir(m.directory), 0, 0)
+			case "r":
+				return m.openDirectory(m.directory, m.cursor, m.offset)
 			}
 			return m, nil
 		}
@@ -151,44 +215,45 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = ""
 			return m, nil
 		}
+		if key == "o" {
+			m.picker = true
+			m.sourceDirectory, m.sourceEntries = m.directory, m.entries
+			m.sourceCursor, m.sourceReady = m.cursor, m.ready
+			m.sourceOffset = m.offset
+			m.ready, m.entries = false, nil
+			directory := m.directory
+			if m.opts.outputDir != "" {
+				if absolute, err := filepath.Abs(m.opts.outputDir); err == nil {
+					if info, err := os.Stat(absolute); err == nil && info.IsDir() {
+						directory = absolute
+					}
+				}
+			}
+			return m.openDirectory(directory, 0, 0)
+		}
 		if m.ready {
 			switch key {
 			case "enter", "e":
 				return m.start()
-			case "up", "k":
-				if m.cursor > 0 {
-					m.cursor--
-				}
-			case "down", "j":
-				if m.cursor < len(m.selected)-1 {
-					m.cursor++
-				}
 			}
+			m.moveCursor(key, len(m.selected))
 			return m, nil
 		}
-		if m.loading {
-			return m, nil
-		}
+		m.moveCursor(key, len(m.entries))
 		switch key {
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.entries)-1 {
-				m.cursor++
-			}
 		case "backspace", "left", "h":
-			m.loading = true
-			return m, readDirectory(filepath.Dir(m.directory))
+			return m.openDirectory(filepath.Dir(m.directory), 0, 0)
+		case "r":
+			return m.openDirectory(m.directory, m.cursor, m.offset)
 		case "enter", "right", "l":
 			if len(m.entries) > 0 {
 				entry := m.entries[m.cursor]
 				if entry.directory {
-					m.loading = true
-					return m, readDirectory(entry.path)
+					return m.openDirectory(entry.path, 0, 0)
 				}
-				m.toggle(entry.path)
+				if key == "enter" {
+					m.toggle(entry.path)
+				}
 			}
 		case "space":
 			if len(m.entries) > 0 && !m.entries[m.cursor].directory {
@@ -215,6 +280,63 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *tuiModel) moveCursor(key string, count int) {
+	switch key {
+	case "up", "k":
+		m.cursor--
+	case "down", "j":
+		m.cursor++
+	case "pgup":
+		m.cursor -= m.visibleRows()
+		m.offset -= m.visibleRows()
+	case "pgdown":
+		m.cursor += m.visibleRows()
+		m.offset += m.visibleRows()
+	case "home":
+		m.cursor = 0
+	case "end":
+		m.cursor = count - 1
+	}
+	m.syncViewport(count)
+}
+
+func (m *tuiModel) syncViewport(count int) {
+	m.cursor = min(max(0, m.cursor), max(0, count-1))
+	m.offset = min(max(0, m.offset), max(0, count-m.visibleRows()))
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	} else if m.cursor >= m.offset+m.visibleRows() {
+		m.offset = m.cursor - m.visibleRows() + 1
+	}
+}
+
+func (m tuiModel) rowCount() int {
+	if m.running || m.done {
+		return len(m.results)
+	}
+	if m.ready {
+		return len(m.selected)
+	}
+	return len(m.entries)
+}
+
+func (m tuiModel) closePicker(choose bool) tuiModel {
+	if choose {
+		m.opts.output, m.opts.outputDir = "", m.directory
+	}
+	m.directory, m.entries, m.cursor = m.sourceDirectory, m.sourceEntries, m.sourceCursor
+	m.offset = m.sourceOffset
+	m.ready, m.picker, m.loading = m.sourceReady, false, false
+	m.syncViewport(m.rowCount())
+	m.sourceDirectory, m.sourceEntries = "", nil
+	m.listingRequest++ // Discard a directory read still in flight when Esc was pressed.
+	m.message = ""
+	if choose {
+		m.message = "Output folder selected. Press e to export."
+	}
+	return m
 }
 
 func (m *tuiModel) toggle(path string) {
@@ -250,7 +372,10 @@ func (m tuiModel) start() (tea.Model, tea.Cmd) {
 		m.message = safe(err.Error())
 		return m, nil
 	}
-	m.jobs, m.running, m.message = jobs, true, ""
+	m.browserCursor = m.cursor
+	m.browserOffset = m.offset
+	m.jobs, m.running, m.done, m.message = jobs, true, false, ""
+	m.results, m.cursor, m.offset = nil, 0, 0
 	return m, m.convertNext()
 }
 
@@ -260,94 +385,4 @@ func (m tuiModel) convertNext() tea.Cmd {
 		result, err := m.convert(m.ctx, j.input, export.Options{Output: j.output, Force: m.opts.force})
 		return convertedMsg{input: j.input, result: result, err: err}
 	}
-}
-
-func (m tuiModel) View() tea.View {
-	var b strings.Builder
-	b.WriteString("XMind → Markdown\n")
-	if m.opts.output != "" {
-		fmt.Fprintf(&b, "Output: %s\n", safe(m.opts.output))
-	} else if m.opts.outputDir != "" {
-		fmt.Fprintf(&b, "Output: %s  ·  images: assets/\n", safe(m.opts.outputDir))
-	} else {
-		b.WriteString("Output: beside each input  ·  images: assets/\n")
-	}
-	if m.opts.force {
-		b.WriteString("Overwrite: on (replace existing Markdown)\n")
-	} else {
-		b.WriteString("Overwrite: off (keep existing files)\n")
-	}
-	b.WriteString("\n")
-	rows := max(1, m.height-13)
-	switch {
-	case m.running || m.done:
-		if m.done {
-			fmt.Fprintf(&b, "Finished %d file(s)\n\n", len(m.results))
-		} else if m.canceled {
-			b.WriteString("Canceling…\n\n")
-		} else {
-			fmt.Fprintf(&b, "Exporting %d/%d: %s\n\n", len(m.results)+1, len(m.jobs), safe(filepath.Base(m.jobs[len(m.results)].input)))
-		}
-		start := max(0, len(m.results)-rows)
-		for _, result := range m.results[start:] {
-			if result.err != nil {
-				fmt.Fprintf(&b, "✗ %s: %s\n", safe(filepath.Base(result.input)), safe(result.err.Error()))
-			} else {
-				fmt.Fprintf(&b, "✓ %s  ·  %d topics, %d images", safe(filepath.Base(result.result.Output)), result.result.Topics, result.result.Images)
-				if len(result.result.Warnings) > 0 {
-					fmt.Fprintf(&b, "  ·  %d warnings", len(result.result.Warnings))
-				}
-				b.WriteString("\n")
-			}
-		}
-		if m.done {
-			b.WriteString("\nEnter/q: close · full results and warnings print on exit")
-		} else {
-			b.WriteString("\nq / Esc / Ctrl+C: cancel")
-		}
-	case m.ready:
-		fmt.Fprintf(&b, "%d file(s) ready to export\n\n", len(m.selected))
-		paths := m.selectedPaths()
-		start := max(0, m.cursor-rows+1)
-		for _, path := range paths[start:min(len(paths), start+rows)] {
-			fmt.Fprintf(&b, "  %s\n", safe(path))
-		}
-		b.WriteString("\nEnter/e: export · ↑/↓: scroll\nf: toggle overwrite · q/Esc: cancel")
-	default:
-		fmt.Fprintf(&b, "%s\n\n", safe(m.directory))
-		if m.loading {
-			b.WriteString("Loading…\n")
-		} else if len(m.entries) == 0 {
-			b.WriteString("No subdirectories or .xmind files here.\n")
-		}
-		start := max(0, m.cursor-rows+1)
-		for i := start; i < min(len(m.entries), start+rows); i++ {
-			entry := m.entries[i]
-			cursor, mark, suffix := " ", " ", ""
-			if i == m.cursor {
-				cursor = ">"
-			}
-			if m.selected[entry.path] {
-				mark = "x"
-			}
-			if entry.directory {
-				suffix = "/"
-				mark = "·"
-			}
-			fmt.Fprintf(&b, "%s [%s] %s%s\n", cursor, mark, safe(entry.name), suffix)
-		}
-		fmt.Fprintf(&b, "\n%d selected · ↑/↓ move · Enter open/select · Space select\n", len(m.selected))
-		b.WriteString("e: export selected or highlighted · a: select all · ←: parent\n")
-		b.WriteString("f: toggle overwrite · q/Esc: quit")
-	}
-	if m.message != "" {
-		fmt.Fprintf(&b, "\n\n%s", safe(m.message))
-	}
-	lines := strings.Split(b.String(), "\n")
-	for i, line := range lines {
-		lines[i] = ansi.Truncate(line, max(1, m.width-1), "…")
-	}
-	view := tea.NewView(strings.Join(lines, "\n") + "\n")
-	view.AltScreen = true
-	return view
 }

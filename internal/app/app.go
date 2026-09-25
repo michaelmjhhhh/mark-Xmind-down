@@ -36,9 +36,14 @@ const usage = `xmind-md — export XMind maps to Markdown with local images
 
 Usage:
   xmind-md                    Open the interactive file browser
+  xmind-md --tui FOLDER        Browse a folder and choose files
   xmind-md [flags] INPUT...
 
+In the browser: arrows move, Space selects, e exports, o chooses output.
+No filenames or export commands need to be typed.
+
 Examples:
+  xmind-md --tui maps          Choose files in maps/
   xmind-md "My Map.xmind"      Convert one file
   xmind-md maps -d exports     Convert a folder into exports/
   xmind-md maps -r -d exports  Include subfolders
@@ -93,11 +98,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "Error: interactive mode requires a terminal; pass an input path for batch conversion.")
 		return 2
 	}
-	paths, inputErrors := discover(inputs, opts.recursive)
+	paths, directory, inputErrors := resolveInputs(inputs, opts.recursive, interactive)
 	for _, err := range inputErrors {
 		fmt.Fprintln(stderr, "Error:", safe(err.Error()))
 	}
-	if len(inputs) > 0 && len(paths) == 0 {
+	if len(inputs) > 0 && len(paths) == 0 && directory == "" {
 		fmt.Fprintln(stderr, "Error: no .xmind files found.")
 		return 1
 	}
@@ -109,7 +114,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	var outcomes []outcome
 	var canceled bool
 	if interactive {
-		outcomes, canceled, err = runTUI(ctx, paths, opts, stdin, stdout, convert)
+		outcomes, canceled, err = runTUI(ctx, paths, directory, opts, stdin, stdout, convert)
 		if err != nil {
 			fmt.Fprintln(stderr, "Error:", safe(err.Error()))
 			if ctx.Err() != nil {
@@ -292,6 +297,25 @@ func discover(inputs []string, recursive bool) ([]string, []error) {
 	}
 	sort.Strings(files)
 	return files, errs
+}
+
+// A single interactive directory opens the picker, including when it is empty.
+// Explicit files/globs retain the prepared selection; batch discovery is unchanged.
+func resolveInputs(inputs []string, recursive, interactive bool) ([]string, string, []error) {
+	if interactive && len(inputs) == 1 {
+		if info, err := os.Stat(inputs[0]); err == nil && info.IsDir() {
+			directory, err := filepath.Abs(inputs[0])
+			if err == nil {
+				directory, err = filepath.EvalSymlinks(directory)
+			}
+			if err != nil {
+				return nil, "", []error{fmt.Errorf("%s: %w", inputs[0], err)}
+			}
+			return nil, directory, nil
+		}
+	}
+	paths, errs := discover(inputs, recursive)
+	return paths, "", errs
 }
 
 func planJobs(paths []string, opts options) ([]job, error) {

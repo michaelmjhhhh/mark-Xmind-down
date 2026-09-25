@@ -79,7 +79,29 @@ Flags can appear before or after paths. `--output` accepts exactly one input; `-
 
 Batch operation works with redirected input/output and needs no terminal. Interactive mode requires a terminal on both stdin and stdout. Exit codes: `0` success, `1` input/conversion failure, `2` usage error, `130` canceled. A failed batch item does not prevent the remaining valid items from being attempted.
 
-In the TUI, use arrow keys or `j`/`k` to move, Enter to open a directory or select a file, Space to toggle selection, and `a` to select all files in the current directory. Press `e` to export selected files; if nothing is selected, it exports the highlighted file. Press `f` to toggle whether existing Markdown can be replaced. Backspace goes to the parent directory. `q`/Esc exits; Ctrl+C cancels. When input paths are supplied with `--tui`, Enter starts the prepared batch.
+## Interactive browser
+
+Run `xmind-md` in a terminal to browse the current directory, or `xmind-md --tui maps` to start in another directory. Folders and `.xmind` files appear in a scrollable list; a scrollbar shows your position. Selection and export work entirely from the keyboard, with no mouse required.
+
+| Key | Action |
+| --- | --- |
+| ↑ / ↓ or `k` / `j` | Move the highlight |
+| Page Up / Page Down | Move one page |
+| Home / End | Jump to the first / last entry |
+| Enter | Open a directory or toggle a file's selection |
+| Space | Toggle a file's selection |
+| `a` | Select or deselect all XMind files in this directory |
+| Backspace or ← | Open the parent directory |
+| `o` | Browse for an output directory |
+| `f` | Toggle replacing existing Markdown |
+| `r` | Refresh the current directory |
+| `e` | Export the selection, or the highlighted file when nothing is selected |
+| `q` or Esc | Quit |
+| Ctrl+C | Cancel |
+
+Selections remain available while browsing other directories. In the output-directory picker, use the same navigation keys, press Space to choose the current directory, or Esc to cancel. The default destination is beside each source file; `--output-dir` can also set a destination at launch. Pressing `f` explicitly enables or disables overwriting; it is disabled by default.
+
+After export, review the results and any warnings. Press `b` to return to the browser for another export, or `q` to quit. During an export, quitting cancels the active work safely. Supplying file paths with `--tui` opens a prepared selection; Enter starts its export. A single directory argument instead opens that directory for browsing.
 
 ## Output
 
@@ -141,3 +163,5 @@ This re-exports the sample maps, checks their full hierarchy and each image asso
 | Total | 411 | 37 |
 
 Format decisions and primary open-source references are recorded in [research.md](research.md). Dependencies are pinned in `go.mod`/`go.sum`; use conventional commit messages for changes.
+
+Maintain [CHANGELOG.md](../CHANGELOG.md) with every user-visible change. Add a concise entry under **Unreleased**, grouped as Added, Changed, or Fixed. Before publishing a release, move those entries into a versioned section with the release date, update the comparison links, and create the matching Git tag. The release workflow publishes the matching changelog section as its release notes and rejects tags without an entry. Describe the behavior users gain or the problem fixed; keep internal refactoring out of the changelog unless it affects users.

@@ -63,6 +63,32 @@ func TestDiscoverDeterministicRecursiveAndDeduplicated(t *testing.T) {
 	}
 }
 
+func TestInteractiveDirectoryOpensPickerWithoutPreselectingFiles(t *testing.T) {
+	dir := t.TempDir()
+	file := fixture(t, dir, "map.xmind")
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, directory, errs := resolveInputs([]string{dir}, false, true)
+	if len(errs) != 0 || len(paths) != 0 || directory != canonical {
+		t.Fatalf("paths=%v directory=%q errors=%v", paths, directory, errs)
+	}
+	paths, directory, errs = resolveInputs([]string{file}, false, true)
+	if len(errs) != 0 || !reflect.DeepEqual(paths, []string{file}) || directory != "" {
+		t.Fatalf("explicit file paths=%v directory=%q errors=%v", paths, directory, errs)
+	}
+	paths, directory, errs = resolveInputs([]string{dir}, false, false)
+	if len(errs) != 0 || !reflect.DeepEqual(paths, []string{file}) || directory != "" {
+		t.Fatalf("batch paths=%v directory=%q errors=%v", paths, directory, errs)
+	}
+	empty := t.TempDir()
+	paths, directory, errs = resolveInputs([]string{empty}, false, true)
+	if len(errs) != 0 || len(paths) != 0 || directory == "" {
+		t.Fatalf("empty folder should open the picker: paths=%v directory=%q errors=%v", paths, directory, errs)
+	}
+}
+
 func TestPlanRejectsPortableOutputCollisionBeforeConversion(t *testing.T) {
 	dir := t.TempDir()
 	a := fixture(t, dir, "one/Map.xmind")

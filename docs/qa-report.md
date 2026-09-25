@@ -69,6 +69,22 @@ being silently treated as fully exported.
   image/download references, missing note attachments, corrupt existing assets,
   symlink protection, staged-write cancellation, and concurrent exports.
 
+## Keyboard TUI verification (v0.2.0)
+
+- The Bubble Tea integration test selects all three real samples, chooses an
+  output directory with the keyboard, and exports 411 topics and 37 images.
+- A real terminal session browsed a 30-file fixture, used the folder picker,
+  exported two files, returned to browsing, and exported a third. All three
+  Markdown files referenced the correct original image bytes; the 14 unique
+  images were deduplicated in the chosen destination.
+- Page Down moved a complete page. Arrow movement within the visible list kept
+  the viewport stable. Unit tests also cover Home/End, resizing, selection across
+  folders, picker cancellation, refresh, repeat exports, and cancellation cleanup.
+- View tests cover narrow terminals, long Unicode names, control characters,
+  proportional scrollbars, and disabled mouse handling. Race tests and `go vet`
+  pass. [Browser](images/terminal.png) and [results](images/export.png) screenshots
+  are captured from the running application with [VHS](demo.tape).
+
 ## Reproduce
 
 From the repository root:

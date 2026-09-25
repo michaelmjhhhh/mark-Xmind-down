@@ -331,8 +331,8 @@ func TestModernRichNotesExportEmbeddedImages(t *testing.T) {
 	if !strings.Contains(markdown, "> Plain text has priority") {
 		t.Fatal("plain-note text was lost")
 	}
-	if strings.Contains(markdown, "Rich text fallback") {
-		t.Fatal("equivalent rich-note text was duplicated alongside plain notes")
+	if !strings.Contains(markdown, "Rich text fallback") {
+		t.Fatal("differing rich-note text was discarded alongside plain notes")
 	}
 	links := assetLinks.FindAllStringSubmatch(markdown, -1)
 	if len(links) != 1 {

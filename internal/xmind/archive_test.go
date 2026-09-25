@@ -296,7 +296,7 @@ func TestNestedRichNoteSpans(t *testing.T) {
 			want := "Hidden label (https://example.com)"
 			if plain {
 				notes = `"plain":{"content":"Plain note"},` + notes
-				want = "Plain note"
+				want = "Plain note:\nPlain note\n\nRich note:\nHidden label (https://example.com)"
 			}
 			doc, err := parseJSON([]byte(`[{"rootTopic":{"title":"Notes root","notes":{` + notes + `}}}]`))
 			if err != nil {

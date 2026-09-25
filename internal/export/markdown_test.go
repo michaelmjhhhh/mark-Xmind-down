@@ -46,7 +46,11 @@ func TestPlainTextBlockMarkersRemainLiteral(t *testing.T) {
 	markdown := string(readFile(t, output))
 	for _, line := range []string{`\- literal`, `\+ literal`, `\---`, `\===`, `1\. numbered`, `2\) numbered`, `10.2 decimal`, `ordinary-dash`} {
 		for _, prefix := range []string{"- ", "> "} {
-			if !strings.Contains(markdown, prefix+line+"\n") {
+			ending := "\n"
+			if prefix == "> " {
+				ending = "  \n"
+			}
+			if !strings.Contains(markdown, prefix+line+ending) {
 				t.Errorf("plain title/note marker not preserved: %q in %s", prefix+line, markdown)
 			}
 		}

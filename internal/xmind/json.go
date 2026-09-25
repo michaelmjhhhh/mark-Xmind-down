@@ -12,6 +12,7 @@ import (
 )
 
 type jsonSheet struct {
+	jsonUnsupported
 	ID            string     `json:"id"`
 	Title         string     `json:"title"`
 	Root          *jsonTopic `json:"rootTopic"`
@@ -22,6 +23,7 @@ type jsonSheet struct {
 	} `json:"relationships"`
 }
 type jsonTopic struct {
+	jsonUnsupported
 	ID              string `json:"id"`
 	Title           string `json:"title"`
 	AttributedTitle []struct {
@@ -53,6 +55,19 @@ type jsonAnnotation struct {
 	TopicID string `json:"topicId"`
 }
 
+// Known non-visual fields are retained long enough to warn explicitly. Unknown
+// presentation properties remain compatible without making a lossless promise.
+type jsonUnsupported struct {
+	Extensions []struct {
+		Provider string `json:"provider"`
+	} `json:"extensions"`
+	Comments   json.RawMessage `json:"comments"`
+	Numbering  json.RawMessage `json:"numbering"`
+	TaskInfo   json.RawMessage `json:"taskInfo"`
+	AudioNotes json.RawMessage `json:"audioNotes"`
+	Legend     json.RawMessage `json:"legend"`
+}
+
 func parseJSON(data []byte) (*Document, error) {
 	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 	var sheets []jsonSheet
@@ -74,6 +89,22 @@ func parseJSON(data []byte) (*Document, error) {
 			sh.Relationships = append(sh.Relationships, Relationship{Title: r.Title, From: r.From, To: r.To})
 		}
 		d.Sheets = append(d.Sheets, sh)
+		d.Warnings = append(d.Warnings, s.jsonUnsupported.warnings("sheet "+s.ID)...)
+		var warnings func(*jsonTopic)
+		warnings = func(t *jsonTopic) {
+			d.Warnings = append(d.Warnings, t.jsonUnsupported.warnings("topic "+t.ID)...)
+			keys := make([]string, 0, len(t.Children))
+			for k := range t.Children {
+				keys = append(keys, k)
+			}
+			orderGroups(keys)
+			for _, k := range keys {
+				for _, child := range t.Children[k] {
+					warnings(child)
+				}
+			}
+		}
+		warnings(s.Root)
 	}
 	return d, nil
 }
@@ -127,14 +158,13 @@ func parseJSONTopic(raw *jsonTopic, depth int, count *int) (*Topic, error) {
 		t.Notes = raw.Notes.Plain.Content
 	}
 	if raw.Notes.HTML != nil {
-		notes, images, err := jsonHTMLText(raw.Notes.HTML.Content)
+		notes, images, links, err := jsonHTMLContent(raw.Notes.HTML.Content)
 		if err != nil {
 			return nil, fmt.Errorf("topic %q notes: %w", raw.ID, err)
 		}
-		if t.Notes == "" {
-			t.Notes = notes
-		}
+		t.Notes = mergeNotes(t.Notes, notes, links)
 		t.NoteImages = images
+		t.NoteLinks = links
 	}
 	for _, m := range raw.Markers {
 		t.Markers = append(t.Markers, m.ID)
@@ -218,12 +248,17 @@ type jsonNoteSpan struct {
 }
 
 func jsonHTMLText(data json.RawMessage) (string, []string, error) {
+	text, images, _, err := jsonHTMLContent(data)
+	return text, images, err
+}
+
+func jsonHTMLContent(data json.RawMessage) (string, []string, []string, error) {
 	if len(data) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
 	var html string
 	if json.Unmarshal(data, &html) == nil {
-		return htmlText(html)
+		return htmlContent(html)
 	}
 	var rich struct {
 		Paragraphs []struct {
@@ -231,28 +266,28 @@ func jsonHTMLText(data json.RawMessage) (string, []string, error) {
 		} `json:"paragraphs"`
 	}
 	if err := decodeJSON(data, &rich); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if rich.Paragraphs == nil {
-		return "", nil, errors.New("unsupported rich note structure: expected paragraphs")
+		return "", nil, nil, errors.New("unsupported rich note structure: expected paragraphs")
 	}
-	var images []string
+	var images, links []string
 	lines := make([]string, 0, len(rich.Paragraphs))
 	for _, p := range rich.Paragraphs {
 		var b strings.Builder
 		for i := range p.Spans {
-			if err := writeNoteSpan(&b, &images, &p.Spans[i], 1); err != nil {
-				return "", nil, err
+			if err := writeNoteSpan(&b, &images, &links, &p.Spans[i], 1); err != nil {
+				return "", nil, nil, err
 			}
 		}
 		lines = append(lines, b.String())
 	}
-	return strings.Join(lines, "\n"), images, nil
+	return strings.Join(lines, "\n"), images, links, nil
 }
 
 // Hyperlink spans contain further text, image, or hyperlink spans. Preserve all
 // descendants before appending the URL, while bounding recursive note nesting.
-func writeNoteSpan(b *strings.Builder, images *[]string, span *jsonNoteSpan, depth int) error {
+func writeNoteSpan(b *strings.Builder, images, links *[]string, span *jsonNoteSpan, depth int) error {
 	if depth > MaxDepth {
 		return fmt.Errorf("rich note span depth exceeds %d", MaxDepth)
 	}
@@ -261,8 +296,11 @@ func writeNoteSpan(b *strings.Builder, images *[]string, span *jsonNoteSpan, dep
 	if span.Image != "" {
 		*images = append(*images, span.Image)
 	}
+	if span.Href != "" {
+		*links = append(*links, span.Href)
+	}
 	for i := range span.Spans {
-		if err := writeNoteSpan(b, images, &span.Spans[i], depth+1); err != nil {
+		if err := writeNoteSpan(b, images, links, &span.Spans[i], depth+1); err != nil {
 			return err
 		}
 	}
@@ -274,4 +312,61 @@ func writeNoteSpan(b *strings.Builder, images *[]string, span *jsonNoteSpan, dep
 		}
 	}
 	return nil
+}
+
+func mergeNotes(plain, rich string, links []string) string {
+	normalize := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if normalize(plain) == "" {
+		return rich
+	}
+	if normalize(rich) == "" || normalize(plain) == normalize(rich) {
+		return plain
+	}
+	// A plain alternative often has the same visible text but omits hyperlink
+	// destinations. The destinations survive independently in NoteLinks.
+	visible := rich
+	replacements := make([]string, 0, len(links)*4)
+	seen := make(map[string]bool, len(links))
+	for _, link := range links {
+		if !seen[link] {
+			seen[link] = true
+			replacements = append(replacements, " ("+link+")", "", "("+link+") ", "")
+		}
+	}
+	if len(replacements) > 0 {
+		// One pass avoids rescanning a long note once for every hyperlink.
+		visible = strings.NewReplacer(replacements...).Replace(visible)
+	}
+	if normalize(plain) == normalize(visible) {
+		return plain
+	}
+	return "Plain note:\n" + plain + "\n\nRich note:\n" + rich
+}
+
+func presentationExtension(provider string) bool {
+	switch provider {
+	case "org.xmind.ui.skeleton.structure.style", "org.xmind.ui.map.unbalanced":
+		return true
+	}
+	return false
+}
+
+func (u jsonUnsupported) warnings(owner string) []string {
+	var warnings []string
+	for _, extension := range u.Extensions {
+		if !presentationExtension(extension.Provider) {
+			warnings = append(warnings, fmt.Sprintf("%s: unsupported extension %q; its content and resources are not exported", owner, extension.Provider))
+		}
+	}
+	fields := []struct {
+		name string
+		data json.RawMessage
+	}{{"comments", u.Comments}, {"numbering", u.Numbering}, {"taskInfo", u.TaskInfo}, {"audioNotes", u.AudioNotes}, {"legend", u.Legend}}
+	for _, field := range fields {
+		data := string(bytes.TrimSpace(field.data))
+		if data != "" && data != "null" && data != "{}" && data != "[]" {
+			warnings = append(warnings, fmt.Sprintf("%s: unsupported %s content is not exported", owner, field.name))
+		}
+	}
+	return warnings
 }

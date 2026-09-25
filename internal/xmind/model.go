@@ -19,6 +19,7 @@ type Topic struct {
 	Title      string
 	Notes      string
 	NoteImages []string
+	NoteLinks  []string
 	Href       string
 	Image      string
 	Labels     []string

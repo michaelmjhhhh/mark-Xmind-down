@@ -12,21 +12,22 @@ import (
 )
 
 type renderer struct {
-	ctx      context.Context
-	a        *xmind.Archive
-	b        strings.Builder
-	assets   map[string][]byte
-	images   map[string]bool
-	refs     map[string]string
-	anchors  map[*xmind.Topic]string
-	targets  map[string]bool
-	byID     map[string]*xmind.Topic
-	warnings []string
-	topics   int
+	ctx        context.Context
+	a          *xmind.Archive
+	b          strings.Builder
+	assets     map[string][]byte
+	images     map[string]bool
+	refs       map[string]string
+	anchors    map[*xmind.Topic]string
+	targets    map[string]bool
+	byID       map[string]*xmind.Topic
+	referenced map[*xmind.Topic]bool
+	warnings   []string
+	topics     int
 }
 
 func newRenderer(ctx context.Context, a *xmind.Archive) *renderer {
-	return &renderer{ctx: ctx, a: a, assets: map[string][]byte{}, images: map[string]bool{}, refs: map[string]string{}, anchors: map[*xmind.Topic]string{}, targets: map[string]bool{}, byID: map[string]*xmind.Topic{}}
+	return &renderer{ctx: ctx, a: a, assets: map[string][]byte{}, images: map[string]bool{}, refs: map[string]string{}, anchors: map[*xmind.Topic]string{}, targets: map[string]bool{}, byID: map[string]*xmind.Topic{}, referenced: map[*xmind.Topic]bool{}}
 }
 
 func (r *renderer) render() (string, error) {
@@ -46,6 +47,16 @@ func (r *renderer) render() (string, error) {
 		if id, ok := internalID(t.Href); ok {
 			r.targets[id] = true
 		}
+		for _, ref := range t.NoteLinks {
+			if id, ok := internalID(ref); ok {
+				r.targets[id] = true
+			}
+		}
+		for _, a := range append(append([]xmind.Annotation{}, t.Summaries...), t.Boundaries...) {
+			if a.TopicID != "" {
+				r.targets[a.TopicID] = true
+			}
+		}
 		for _, g := range t.Children {
 			for _, child := range g.Topics {
 				index(child)
@@ -61,6 +72,11 @@ func (r *renderer) render() (string, error) {
 			r.targets[rel.From], r.targets[rel.To] = true, true
 		}
 	}
+	for id := range r.targets {
+		if t, ok := r.byID[id]; ok {
+			r.referenced[t] = true
+		}
+	}
 	for i, s := range r.a.Document.Sheets {
 		if err := r.ctx.Err(); err != nil {
 			return "", err
@@ -71,7 +87,7 @@ func (r *renderer) render() (string, error) {
 		if s.Root == nil {
 			return "", fmt.Errorf("sheet %d has no root topic", i+1)
 		}
-		if len(r.a.Document.Sheets) > 1 && s.Title != "" && s.Title != s.Root.Title {
+		if s.Title != "" && s.Title != s.Root.Title {
 			r.b.WriteString("Sheet: " + inline(s.Title) + "\n\n")
 		}
 		if err := r.heading(s.Root, 1); err != nil {
@@ -152,7 +168,7 @@ func (r *renderer) list(t *xmind.Topic, depth int) error {
 		return err
 	}
 	r.b.WriteString(prefix + "- ")
-	if r.targets[t.ID] {
+	if r.referenced[t] {
 		r.b.WriteString(`<a id="` + r.anchors[t] + `"></a> `)
 	}
 	r.b.WriteString(title + "\n")
@@ -179,16 +195,7 @@ func (r *renderer) groups(groups []xmind.Group, depth int) error {
 }
 
 func (r *renderer) anchor(t *xmind.Topic, prefix string) {
-	needed := r.targets[t.ID]
-	if !needed {
-		for id, target := range r.byID {
-			if target == t && r.targets[id] {
-				needed = true
-				break
-			}
-		}
-	}
-	if needed {
+	if r.referenced[t] {
 		r.b.WriteString(prefix + `<a id="` + r.anchors[t] + `"></a>` + "\n\n")
 	}
 }
@@ -215,14 +222,14 @@ func (r *renderer) title(t *xmind.Topic) (string, error) {
 
 func (r *renderer) details(t *xmind.Topic, prefix string) error {
 	block := func(s string) { r.b.WriteString("\n" + prefix + s + "\n\n") }
-	if t.Image != "" && strings.TrimSpace(t.Title) != "" {
+	if t.Image != "" && inline(t.Title) != "" {
 		img, err := r.image(t.Image, t.Title)
 		if err != nil {
 			return err
 		}
 		block(img)
 	}
-	if t.Href != "" && strings.TrimSpace(t.Title) == "" && t.Image != "" {
+	if t.Href != "" && inline(t.Title) == "" && t.Image != "" {
 		dest, err := r.link(t.Href)
 		if err != nil {
 			return err
@@ -245,12 +252,35 @@ func (r *renderer) details(t *xmind.Topic, prefix string) error {
 		}
 		block("Markers: " + strings.Join(markers, ", "))
 	}
-	if notes := strings.TrimSpace(clean(t.Notes)); notes != "" {
+	if notes := strings.Trim(clean(t.Notes), "\n"); notes != "" {
 		r.b.WriteString("\n")
 		for _, line := range strings.Split(notes, "\n") {
-			r.b.WriteString(prefix + "> " + escape(line) + "\n")
+			if line == "" {
+				r.b.WriteString(prefix + ">\n")
+				continue
+			}
+			leading := len(line) - len(strings.TrimLeft(line, " "))
+			// Nonbreaking space entities keep source indentation without
+			// accidentally turning a plain note into an indented code block.
+			r.b.WriteString(prefix + "> " + strings.Repeat("&nbsp;", leading) + escape(line[leading:]) + "  \n")
 		}
 		r.b.WriteString("\n")
+	}
+	seenNoteLinks := map[string]bool{}
+	for _, ref := range t.NoteLinks {
+		if seenNoteLinks[ref] {
+			continue
+		}
+		seenNoteLinks[ref] = true
+		dest, err := r.link(ref)
+		if err != nil {
+			return err
+		}
+		if dest != "" {
+			block("Note link: [" + inline(ref) + "](" + dest + ")")
+		} else {
+			block("Note link: " + inline(ref))
+		}
 	}
 	for _, ref := range t.NoteImages {
 		img, err := r.image(ref, "Note image")
@@ -261,27 +291,30 @@ func (r *renderer) details(t *xmind.Topic, prefix string) error {
 	}
 	if t.Href != "" {
 		u, err := url.Parse(t.Href)
-		_, internal := internalID(t.Href)
-		if !internal && (err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "mailto" && u.Scheme != "xap")) {
+		id, internal := internalID(t.Href)
+		if (internal && r.byID[id] == nil) || (!internal && (err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "mailto" && u.Scheme != "xap"))) {
 			block("Link: " + inline(t.Href))
 		}
 	}
 	for _, b := range t.Boundaries {
-		block(annotation("Boundary", b))
+		block(r.annotation("Boundary", b))
 	}
 	for _, s := range t.Summaries {
-		block(annotation("Summary", s))
+		block(r.annotation("Summary", s))
 	}
 	return nil
 }
 
-func annotation(kind string, a xmind.Annotation) string {
+func (r *renderer) annotation(kind string, a xmind.Annotation) string {
 	text := kind
 	if a.Range != "" {
 		text += " (" + inline(a.Range) + ")"
 	}
 	if a.Title != "" {
 		text += ": " + inline(a.Title)
+	}
+	if a.TopicID != "" {
+		text += " → " + r.topicLink(a.TopicID)
 	}
 	return text
 }
@@ -292,7 +325,8 @@ func internalID(ref string) (string, bool) {
 		return id, err == nil
 	}
 	if strings.HasPrefix(ref, "#") {
-		return strings.TrimPrefix(ref, "#"), true
+		id, err := url.PathUnescape(strings.TrimPrefix(ref, "#"))
+		return id, err == nil
 	}
 	return "", false
 }

@@ -99,23 +99,24 @@ func Convert(ctx context.Context, input string, opts Options) (Result, error) {
 	return result, nil
 }
 
-func assetExtension(name string, data []byte, isImage bool) string {
-	if isImage {
-		switch http.DetectContentType(data) {
-		case "image/png":
-			return ".png"
-		case "image/jpeg":
-			return ".jpg"
-		case "image/gif":
-			return ".gif"
-		case "image/webp":
-			return ".webp"
-		case "image/bmp":
-			return ".bmp"
-		case "image/x-icon":
-			return ".ico"
-		}
+func assetExtension(name string, data []byte, _ bool) string {
+	// Sniff images for attachments too: an archive path reused as both an
+	// image and a download must have the same filename in either visit order.
+	switch http.DetectContentType(data) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp":
+		return ".bmp"
+	case "image/x-icon":
+		return ".ico"
 	}
+
 	ext := strings.ToLower(path.Ext(name))
 	if len(ext) > 1 && len(ext) <= 12 {
 		valid := true
@@ -166,53 +167,86 @@ func publishAssets(ctx context.Context, root *os.Root, assets map[string][]byte)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if info, err := dir.Lstat(name); err == nil {
-			if !info.Mode().IsRegular() {
-				return fmt.Errorf("asset is not a regular file: %s", name)
-			}
-			if info.Size() != int64(len(assets[name])) {
-				return fmt.Errorf("existing asset conflicts with its content hash: %s", name)
-			}
-			data, err := dir.ReadFile(name)
-			if err != nil {
-				return err
-			}
-			if !bytes.Equal(data, assets[name]) {
-				return fmt.Errorf("existing asset conflicts with its content hash: %s", name)
-			}
-		} else if !errors.Is(err, fs.ErrNotExist) {
+		if _, err := checkAsset(dir, name, assets[name]); err != nil {
 			return err
 		}
 	}
 	for _, name := range names {
-		if err := ctx.Err(); err != nil {
+		if err := publishAsset(ctx, dir, name, assets[name]); err != nil {
 			return err
 		}
-		f, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-		if errors.Is(err, fs.ErrExist) {
-			// Recheck after a concurrent writer: never silently accept corrupt bytes.
-			info, e := dir.Lstat(name)
-			if e != nil || !info.Mode().IsRegular() || info.Size() != int64(len(assets[name])) {
-				return fmt.Errorf("asset changed during export: %s", name)
-			}
-			data, e := dir.ReadFile(name)
-			if e != nil || !bytes.Equal(data, assets[name]) {
-				return fmt.Errorf("asset changed during export: %s", name)
-			}
-			continue
+	}
+	return nil
+}
+
+// checkAsset accepts only a complete, regular file with the expected bytes.
+// It is also used after a concurrent publisher wins the destination name.
+func checkAsset(dir *os.Root, name string, expected []byte) (bool, error) {
+	info, err := dir.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return true, fmt.Errorf("asset is not a regular file: %s", name)
+	}
+	if info.Size() != int64(len(expected)) {
+		return true, fmt.Errorf("existing asset conflicts with its content hash: %s", name)
+	}
+	data, err := dir.ReadFile(name)
+	if err != nil {
+		return true, err
+	}
+	if !bytes.Equal(data, expected) {
+		return true, fmt.Errorf("existing asset conflicts with its content hash: %s", name)
+	}
+	return true, nil
+}
+
+func publishAsset(ctx context.Context, dir *os.Root, name string, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if exists, err := checkAsset(dir, name, data); exists || err != nil {
+		return err
+	}
+	// Never write at a final hash filename: another map may already refer to it,
+	// and another exporter must never observe a partially written resource.
+	temp := ".xmind-md-asset-" + rand.Text() + ".tmp"
+	f, err := dir.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return err
+	}
+	defer dir.Remove(temp)
+	_, writeErr := f.Write(data)
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		return errors.Join(writeErr, closeErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Linking publishes complete bytes without replacing an existing file.
+	if err := dir.Link(temp, name); err == nil {
+		return nil
+	}
+	if exists, err := checkAsset(dir, name, data); exists || err != nil {
+		return err
+	}
+	// Some portable filesystems (for example FAT/exFAT) do not support hard
+	// links. A same-directory rename still publishes only complete bytes.
+	// Concurrent exporters use the same bytes for this content-addressed name;
+	// an existing destination is checked above rather than blindly replaced.
+	if err := dir.Rename(temp, name); err != nil {
+		if exists, checkErr := checkAsset(dir, name, data); exists || checkErr != nil {
+			return checkErr
 		}
-		if err != nil {
-			return err
-		}
-		_, writeErr := f.Write(assets[name])
-		if writeErr == nil {
-			writeErr = f.Sync()
-		}
-		closeErr := f.Close()
-		if writeErr != nil || closeErr != nil {
-			_ = dir.Remove(name)
-			return errors.Join(writeErr, closeErr)
-		}
+		return err
 	}
 	return nil
 }

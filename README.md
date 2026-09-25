@@ -72,15 +72,17 @@ Supported content:
 - Titles, textual notes, embedded topic/note images, labels, marker IDs, web links, embedded attachments, internal topic links, relationship endpoints/titles, and boundary/summary annotations.
 - Unicode, deep hierarchies, repeated assets, spaces and URL-encoded resource names.
 
-Markdown intentionally flattens presentation: fonts, colors, positioning, branch shapes, rich text styling, and other canvas layout are not reproduced. Rich notes become plain text with note images retained. Relationships and boundaries become textual annotations. External image URLs remain URLs and produce a warning; the tool never downloads them. Unsupported hyperlink schemes remain visible as text. Internal links that cannot be resolved produce a warning.
+Markdown intentionally flattens presentation: fonts, colors, positioning, branch shapes, rich text styling, and other canvas layout are not reproduced. Rich notes become plain text with note images and hyperlinks retained; embedded note attachments are extracted too. If plain and rich note alternatives contain different text, both are labeled and preserved. Plain-note indentation and line breaks remain visible. Relationships and boundaries become textual annotations; summary annotations link to their summary topics. External image URLs remain URLs and produce a warning; the tool never downloads them. Unsupported hyperlink schemes and unresolved internal links remain visible as text and produce warnings.
+
+Known unsupported semantic content, including comments, custom legends, task/audio metadata, and non-presentation extensions, produces explicit warnings. Inspect these warnings before treating an unfamiliar map as a complete export. The supplied samples contain none of these unsupported fields.
 
 Modern JSON takes precedence even when XML is also present. Some modern XMind files contain only a compatibility warning in `content.xml`; corrupt JSON therefore fails explicitly instead of falling back and exporting the warning as your map. Password-protected/encrypted files and non-ZIP formats are unsupported. Future files using the supported schemas can be converted; incompatible future schemas require a parser update.
 
 ## Reliability and safety
 
-Conversion parses and resolves all referenced resources before writing output. Missing or empty resources and ZIP checksum/decompression failures stop the export. Image bytes are preserved without decoding or repairing the image format itself. The source archive is never modified. Existing Markdown requires `--force`; existing hashed assets are verified and never overwritten. Output symlinks and an `assets/` symlink are rejected; resource writes use Go's directory-confined `os.Root` APIs.
+Conversion parses and resolves all referenced resources before writing output. Missing or empty resources and ZIP checksum/decompression failures stop the export. Image bytes are preserved without decoding or repairing the image format itself. The source archive is never modified. Existing Markdown requires `--force`; existing hashed assets are verified and reused. Output symlinks and an `assets/` symlink are rejected; resource writes use Go's directory-confined `os.Root` APIs.
 
-Markdown is staged and synced before replacement. Filesystem rename guarantees depend on the platform/filesystem; this is not a transactional multi-file operation. A canceled or failed write can leave unused complete assets, but never a successfully reported Markdown file with missing assets. Unused assets are not automatically deleted because another exported map may reference them.
+Markdown and assets are staged and synced before publication. Assets use atomic no-clobber hard links where supported, with same-directory rename on filesystems without hard links; a simultaneous exporter may replace an identical asset during that fallback. Filesystem rename guarantees depend on the platform/filesystem; this is not a transactional multi-file operation. A canceled or failed write can leave unused complete assets, but never a successfully reported Markdown file with missing assets. Unused assets are not automatically deleted because another exported map may reference them.
 
 ZIP paths, duplicate entries, symbolic links, encryption flags, checksums, and resource references are validated. Limits bound ordinary hostile/corrupt input: 10,000 entries, 32 MiB content, 64 MiB per resource, 512 MiB advertised expanded archive size, 100,000 topics, and 256 topic levels. ZIP files are read in place; archive paths are never extracted to disk. Unknown visual fields are tolerated, and unknown child groups retain their topics in a deterministic order.
 
@@ -93,7 +95,13 @@ go vet ./...
 go run ./cmd/xmind-md assets --output-dir exports
 ```
 
-The integration tests open the actual supplied samples, check counts, verify image bytes and links, and compare repeat exports. Generated fixtures exercise legacy XML, Unicode/escaping, multiple sheets, notes, links, duplicate images, malformed archives, path traversal, depth/size limits, cancellation, and overwrite protection. CI runs tests on Linux, macOS, and Windows and compiles binaries for their amd64 and arm64 targets.
+The integration tests independently read the actual source samples and parse the exported Markdown with Goldmark's CommonMark/GFM parser. They compare every topic's rendered text, sibling order, and parent; decode every sample image; verify its source bytes and link destination; and repeat and relocate exports. Goldmark is a test dependency only. Generated fixtures cover 99 special-title cases, 256 nested topics, metadata, notes, attachments, malformed archives, path limits, cancellation, and simultaneous exports. CI runs tests on Linux, macOS, and Windows and compiles binaries for their amd64 and arm64 targets.
+
+For a second independent parser, install Pandoc and run:
+
+    python3 scripts/qa_samples.py
+
+This re-exports the sample maps, checks their full hierarchy and each image association using Pandoc's GFM AST, and writes HTML previews plus a JSON report under exports/. See [the detailed QA report](docs/qa-report.md) for findings, fixes, and the scope of the checks.
 
 | Supplied sample | Topics | Embedded images |
 | --- | ---: | ---: |

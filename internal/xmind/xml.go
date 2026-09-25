@@ -47,6 +47,7 @@ func parseXML(data []byte) (*Document, error) {
 	if len(d.Sheets) == 0 {
 		return nil, errors.New("content.xml has no sheets")
 	}
+	d.Warnings = root.unsupportedWarnings()
 	return d, nil
 }
 
@@ -129,9 +130,8 @@ func parseXMLTopic(raw *xmlElement, depth int, count *int) (*Topic, error) {
 			t.Notes = plain.text()
 		}
 		if rich := notes.child("html"); rich != nil {
-			if t.Notes == "" {
-				t.Notes = strings.TrimSpace(rich.blockText())
-			}
+			t.NoteLinks = rich.links()
+			t.Notes = mergeNotes(t.Notes, strings.TrimSpace(rich.blockText()), t.NoteLinks)
 			t.NoteImages = rich.images()
 		}
 	}
@@ -235,20 +235,25 @@ func (n *xmlElement) writeBlockText(b *strings.Builder) {
 		case string:
 			b.WriteString(v)
 		case *xmlElement:
-			if v.name == "br" {
+			if v.name == "br" || v.name == "hr" {
 				b.WriteByte('\n')
 				continue
 			}
 			if v.name == "script" || v.name == "style" {
 				continue
 			}
+			if noteBlock(v.name) {
+				startNoteBlock(b)
+			}
 			v.writeBlockText(b)
 			if v.name == "a" && v.attrs["href"] != "" && v.attrs["href"] != v.text() {
 				b.WriteString(" (" + v.attrs["href"] + ")")
 			}
-			switch v.name {
-			case "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
+			switch {
+			case noteBlock(v.name):
 				b.WriteByte('\n')
+			case v.name == "td" || v.name == "th":
+				b.WriteByte(' ')
 			}
 		}
 	}
@@ -276,15 +281,61 @@ func (n *xmlElement) images() []string {
 	return out
 }
 
+func (n *xmlElement) links() []string {
+	var out []string
+	for _, p := range n.parts {
+		if c, ok := p.(*xmlElement); ok {
+			if c.name == "script" || c.name == "style" {
+				continue
+			}
+			if c.name == "a" && c.attrs["href"] != "" {
+				out = append(out, c.attrs["href"])
+			}
+			out = append(out, c.links()...)
+		}
+	}
+	return out
+}
+
+func (n *xmlElement) unsupportedWarnings() []string {
+	var warnings []string
+	if n.name == "topic" || n.name == "sheet" {
+		owner := n.name + " " + n.attrs["id"]
+		for _, field := range []string{"comments", "numbering", "task-info", "audio-notes", "legend"} {
+			if n.child(field) != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: unsupported %s content is not exported", owner, field))
+			}
+		}
+		if extensions := n.child("extensions"); extensions != nil {
+			for _, extension := range extensions.children("extension") {
+				if !presentationExtension(extension.attrs["provider"]) {
+					warnings = append(warnings, fmt.Sprintf("%s: unsupported extension %q; its content and resources are not exported", owner, extension.attrs["provider"]))
+				}
+			}
+		}
+	}
+	for _, part := range n.parts {
+		if child, ok := part.(*xmlElement); ok {
+			warnings = append(warnings, child.unsupportedWarnings()...)
+		}
+	}
+	return warnings
+}
+
 // htmlText reads XHTML notes; malformed HTML still preserves its visible text.
 // It never evaluates markup, entities, or external resources.
 func htmlText(value string) (string, []string, error) {
+	text, images, _, err := htmlContent(value)
+	return text, images, err
+}
+
+func htmlContent(value string) (string, []string, []string, error) {
 	dec := xml.NewDecoder(strings.NewReader("<notes>" + value + "</notes>"))
 	dec.Strict = false
 	dec.AutoClose = xml.HTMLAutoClose
 	dec.Entity = xml.HTMLEntity
 	var b strings.Builder
-	var images []string
+	var images, links []string
 	suppressed := 0
 	depth := 0
 	for {
@@ -293,43 +344,51 @@ func htmlText(value string) (string, []string, error) {
 			break
 		}
 		if err != nil {
-			return "", nil, fmt.Errorf("invalid HTML notes: %w", err)
+			return "", nil, nil, fmt.Errorf("invalid HTML notes: %w", err)
 		}
 		switch v := token.(type) {
 		case xml.StartElement:
+			name := strings.ToLower(v.Name.Local)
 			depth++
 			if depth > MaxDepth*4 {
-				return "", nil, errors.New("HTML notes nesting exceeds safety limit")
+				return "", nil, nil, errors.New("HTML notes nesting exceeds safety limit")
 			}
-			if v.Name.Local == "script" || v.Name.Local == "style" {
+			if name == "script" || name == "style" {
 				suppressed++
 			}
-			if suppressed == 0 && v.Name.Local == "br" {
+			if suppressed == 0 && noteBlock(name) {
+				startNoteBlock(&b)
+			}
+			if suppressed == 0 && (name == "br" || name == "hr") {
 				b.WriteByte('\n')
 			}
-			if suppressed == 0 && v.Name.Local == "img" {
+			if suppressed == 0 && name == "img" {
 				for _, a := range v.Attr {
-					if a.Name.Local == "src" {
+					if strings.EqualFold(a.Name.Local, "src") {
 						images = append(images, a.Value)
 					}
 				}
 			}
-			if suppressed == 0 && v.Name.Local == "a" {
+			if suppressed == 0 && name == "a" {
 				for _, a := range v.Attr {
-					if a.Name.Local == "href" {
+					if strings.EqualFold(a.Name.Local, "href") && a.Value != "" {
+						links = append(links, a.Value)
 						b.WriteString("(" + a.Value + ") ")
 					}
 				}
 			}
 		case xml.EndElement:
+			name := strings.ToLower(v.Name.Local)
 			depth--
-			if v.Name.Local == "script" || v.Name.Local == "style" {
+			if name == "script" || name == "style" {
 				suppressed--
 			}
 			if suppressed == 0 {
-				switch v.Name.Local {
-				case "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
+				switch {
+				case noteBlock(name):
 					b.WriteByte('\n')
+				case name == "td" || name == "th":
+					b.WriteByte(' ')
 				}
 			}
 		case xml.CharData:
@@ -337,8 +396,22 @@ func htmlText(value string) (string, []string, error) {
 				b.Write(v)
 			}
 		case xml.Directive:
-			return "", nil, errors.New("HTML directives and DTDs are unsupported")
+			return "", nil, nil, errors.New("HTML directives and DTDs are unsupported")
 		}
 	}
-	return strings.TrimSpace(b.String()), images, nil
+	return strings.TrimSpace(b.String()), images, links, nil
+}
+
+func noteBlock(name string) bool {
+	switch name {
+	case "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote", "ul", "ol", "dl", "dt", "dd", "table", "caption", "section", "article", "address", "figure", "figcaption":
+		return true
+	}
+	return false
+}
+
+func startNoteBlock(b *strings.Builder) {
+	if b.Len() > 0 && b.String()[b.Len()-1] != '\n' {
+		b.WriteByte('\n')
+	}
 }

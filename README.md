@@ -6,7 +6,7 @@
 
 Turn XMind maps into Markdown with linked local images. Browse, select, and export using only your keyboard in a [Bubble Tea](https://github.com/charmbracelet/bubbletea) terminal interface.
 
-![xmind-md keyboard file browser](docs/images/terminal.png)
+![xmind-md demo: browse, select files, view keyboard help, and export Markdown](docs/images/demo.gif)
 
 ## Install
 
@@ -71,5 +71,12 @@ Use `xmind-md --help` for options, or read the [full reference](docs/reference.m
 ## Development
 
 Run `go test ./...`. CI checks macOS, Windows, and Linux. All **411 topics and 37 images** in the supplied samples are covered by fidelity checks.
+
+Re-record the demo with [VHS](https://github.com/charmbracelet/vhs) (requires `ttyd`, `ffmpeg`, and a Chromium-based browser):
+
+```sh
+go build -o bin/xmind-md ./cmd/xmind-md
+env -u NO_COLOR COLORTERM=truecolor vhs docs/demo-gif.tape
+```
 
 [Changelog](CHANGELOG.md) · [QA report](docs/qa-report.md) · [Format research](docs/research.md) · [Contributing changes](docs/reference.md#development-and-verification)

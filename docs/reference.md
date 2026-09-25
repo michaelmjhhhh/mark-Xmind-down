@@ -8,7 +8,7 @@ Convert XMind mind maps into portable Markdown, with embedded images copied byte
 
 The [README installers](../README.md#install) download the latest release for macOS, Linux, or Windows (amd64/arm64), verify its SHA-256 checksum, and install for the current user. Go and administrator access are not required.
 
-- macOS/Linux: `~/.local/bin/xmind-md`. The sourced installer updates the current PATH and adds an idempotent block to your shell's startup files. Bash login/interactive files and Zsh's `ZDOTDIR` are respected.
+- macOS/Linux: `~/.local/bin/xmind-md`. The shell installer updates the current PATH and adds an idempotent block to your shell's startup files. Bash login/interactive files and Zsh's `ZDOTDIR` are respected.
 - Windows: `%LOCALAPPDATA%\Programs\xmind-md\xmind-md.exe`. The installer updates the current process and persistent User PATH, preserving other entries.
 
 Re-run the same installer to update. Set `XMIND_MD_VERSION` to a release tag such as `v0.1.0` to install a specific version. Checksum or download failures leave the previous executable intact.

@@ -15,7 +15,7 @@ No Go installation or administrator access needed. The installer configures PATH
 **macOS / Linux** (Bash or Zsh):
 
 ```sh
-source <(curl -fsSL https://raw.githubusercontent.com/michaelmjhhhh/mark-Xmind-down/main/scripts/install.sh || printf 'return 1\n')
+eval "$(curl -fsSL https://raw.githubusercontent.com/michaelmjhhhh/mark-Xmind-down/main/scripts/install.sh || printf 'false')"
 ```
 
 **Windows** (PowerShell):

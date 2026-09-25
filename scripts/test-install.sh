@@ -31,6 +31,7 @@ done
 printf '%s\n' "$url" >> "$XMIND_TEST_DOWNLOADS/requests"
 [ "${XMIND_TEST_FAIL:-0}" != 1 ] || exit 22
 case "$url" in
+    */scripts/install.sh) cat "$XMIND_TEST_INSTALLER" ;;
     */SHA256SUMS) cp "$XMIND_TEST_DOWNLOADS/SHA256SUMS" "$dest" ;;
     *) cp "$XMIND_TEST_DOWNLOADS/binary" "$dest"
        if [ "${XMIND_TEST_CORRUPT:-0}" = 1 ]; then printf 'corrupt' >> "$dest"; fi ;;
@@ -47,6 +48,23 @@ SYSCTL
 chmod +x "$test_dir/tools/"*
 test_path=$test_dir/tools:$PATH
 export XMIND_TEST_DOWNLOADS="$test_dir/downloads"
+export XMIND_TEST_INSTALLER="$root/scripts/install.sh"
+
+# Execute the README's actual one-line bootstrap, including a failed download.
+# macOS Bash 3.2 can silently skip `source <(...)`; keep this end-to-end check.
+bootstrap=$(sed -n '/^eval .*curl/p' "$root/README.md")
+test -n "$bootstrap"
+for shell in bash zsh; do
+    if ! command -v "$shell" >/dev/null 2>&1; then continue; fi
+    env HOME="$test_dir/bootstrap $shell" SHELL="/bin/$shell" PATH="$test_path" BOOTSTRAP="$bootstrap" "$shell" -c '
+        eval "$BOOTSTRAP" || exit 1
+        test "$(xmind-md --version)" = "xmind-md fixture"
+    '
+    if env HOME="$test_dir/failed bootstrap" SHELL="/bin/$shell" PATH="$test_path" BOOTSTRAP="$bootstrap" XMIND_TEST_FAIL=1 "$shell" -c 'eval "$BOOTSTRAP"'; then
+        printf 'A failed bootstrap must return failure.\n' >&2; exit 1
+    fi
+done
+test ! -e "$test_dir/failed bootstrap/.local/bin/xmind-md"
 
 run_installer() {
     env HOME="$test_dir/user home" SHELL=/bin/bash PATH="$test_path" "$@"

@@ -1,6 +1,12 @@
 # mark-Xmind-down
 
+[![Verify](https://github.com/michaelmjhhhh/mark-Xmind-down/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/michaelmjhhhh/mark-Xmind-down/actions/workflows/ci.yml)
+[![Go version](https://img.shields.io/github/go-mod/go-version/michaelmjhhhh/mark-Xmind-down?logo=go&label=Go&color=00ADD8)](go.mod)
+[![macOS · Windows · Linux](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-64748b)](https://github.com/michaelmjhhhh/mark-Xmind-down/actions/workflows/ci.yml)
+
 Convert XMind files to Markdown, with images saved in a linked `assets/` folder. Works on macOS, Windows, and Linux. Includes a [Bubble Tea](https://github.com/charmbracelet/bubbletea) terminal browser.
+
+![xmind-md exporting three XMind maps with local images](docs/images/terminal.png)
 
 ## Install
 

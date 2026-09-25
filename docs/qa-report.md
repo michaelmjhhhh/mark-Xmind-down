@@ -85,6 +85,22 @@ being silently treated as fully exported.
   pass. [Browser](images/terminal.png) and [results](images/export.png) screenshots
   are captured from the running application with [VHS](demo.tape).
 
+## Visual hierarchy and keyboard help (v0.3.0)
+
+The action strip now separates the primary action, navigation, and help. Colored
+key labels, selection markers, and status badges retain their meaning with color
+disabled. Grouped help opens with `?` and scrolls without moving the underlying
+file selection; Esc returns to the same screen.
+
+Regression checks cover 105 screen layouts and 60 help scenarios across five
+terminal widths and three heights. They check complete action labels, reachable
+help entries, resize behavior, and unchanged selection after closing help. A real
+30 × 12 terminal session verified help scrolling, blocked export keys while help
+is open, and Esc returning first to the output picker, then to the file browser.
+Race tests, `go vet`, and the real-sample export integration test pass. The
+[browser](images/terminal.png), [help](images/help.png), and
+[results](images/export.png) screenshots come from the running program.
+
 ## Reproduce
 
 From the repository root:

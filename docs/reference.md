@@ -83,6 +83,10 @@ Batch operation works with redirected input/output and needs no terminal. Intera
 
 Run `xmind-md` in a terminal to browse the current directory, or `xmind-md --tui maps` to start in another directory. Folders and `.xmind` files appear in a scrollable list; a scrollbar shows your position. Selection and export work entirely from the keyboard, with no mouse required.
 
+Contextual hints put the primary action first and group navigation separately. Color distinguishes actions, folders, selections, and results; bracketed key labels and status symbols keep the interface readable without color.
+
+Press `?` for grouped keyboard help. Use ↑ / ↓, Page Up / Down, or Home / End to scroll it; press `?` or Esc to close it. Selection, export, and folder actions are paused while help is open; `q` and Ctrl+C still quit. In the output-folder picker, Esc closes help first, then a second Esc cancels the picker. Help is unavailable during an active export.
+
 | Key | Action |
 | --- | --- |
 | ↑ / ↓ or `k` / `j` | Move the highlight |
@@ -96,6 +100,7 @@ Run `xmind-md` in a terminal to browse the current directory, or `xmind-md --tui
 | `f` | Toggle replacing existing Markdown |
 | `r` | Refresh the current directory |
 | `e` | Export the selection, or the highlighted file when nothing is selected |
+| `?` | Open or close keyboard help |
 | `q` or Esc | Quit |
 | Ctrl+C | Cancel |
 

@@ -43,6 +43,8 @@ type tuiModel struct {
 	results                                 []outcome
 	history                                 []outcome
 	picker                                  bool
+	help                                    bool
+	helpOffset                              int
 	sourceDirectory                         string
 	sourceEntries                           []browserEntry
 	sourceCursor, browserCursor             int
@@ -134,6 +136,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.syncViewport(m.rowCount())
+		if m.help {
+			m.scrollHelp("")
+		}
 	case listingMsg:
 		// A pending folder read may finish after Esc cancels the output picker.
 		if msg.request != m.listingRequest {
@@ -161,6 +166,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running, m.done = false, true
 	case tea.KeyPressMsg:
 		key := msg.String()
+		if m.help {
+			switch key {
+			case "?", "esc":
+				m.help = false
+				return m, nil
+			case "q", "ctrl+c":
+				// The usual quit behavior remains available from help.
+			default:
+				m.scrollHelp(key)
+				return m, nil
+			}
+		}
 		if key == "esc" && m.picker {
 			return m.closePicker(false), nil
 		}
@@ -175,6 +192,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.running {
+			return m, nil
+		}
+		if key == "?" {
+			m.help, m.helpOffset = true, 0
 			return m, nil
 		}
 		if m.done {
@@ -280,6 +301,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *tuiModel) scrollHelp(key string) {
+	rows := m.helpVisibleRows()
+	switch key {
+	case "up", "k":
+		m.helpOffset--
+	case "down", "j":
+		m.helpOffset++
+	case "pgup":
+		m.helpOffset -= rows
+	case "pgdown":
+		m.helpOffset += rows
+	case "home":
+		m.helpOffset = 0
+	case "end":
+		m.helpOffset = len(m.helpContent())
+	}
+	m.helpOffset = min(max(0, m.helpOffset), max(0, len(m.helpContent())-rows))
 }
 
 func (m *tuiModel) moveCursor(key string, count int) {

@@ -4,6 +4,21 @@ Notable user-visible changes are recorded here, with the newest release first.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-25
+
+### Added
+
+- Contextual keyboard help with grouped actions and scrolling, opened with `?` and closed with `?` or Esc.
+
+### Changed
+
+- A clearer visual hierarchy with color-coded key labels, prominent primary actions, and separate navigation hints.
+- Less repeated information in the browser, with the destination and replacement setting grouped together.
+
+### Fixed
+
+- Keep essential action hints visible in compact terminals.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added
@@ -34,6 +49,7 @@ Notable user-visible changes are recorded here, with the newest release first.
 - Fidelity checks for all 411 topics and 37 images in the supplied sample maps, plus cross-platform CI.
 - Validation of malformed archives, missing resources, unsafe paths, and output conflicts; warnings for known unsupported content.
 
-[Unreleased]: https://github.com/michaelmjhhhh/mark-Xmind-down/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/michaelmjhhhh/mark-Xmind-down/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/michaelmjhhhh/mark-Xmind-down/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/michaelmjhhhh/mark-Xmind-down/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/michaelmjhhhh/mark-Xmind-down/releases/tag/v0.1.0

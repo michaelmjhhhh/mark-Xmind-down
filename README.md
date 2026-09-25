@@ -32,19 +32,16 @@ Re-run the installer to update. [Other shells and source builds →](docs/refere
 xmind-md
 ```
 
-The browser opens in your current folder. No filenames or export commands to type.
+The browser opens in your current folder. Contextual hints highlight the available actions; press **?** for grouped keyboard help.
 
 | Key | Action |
 | --- | --- |
 | **↑ / ↓** | Move through files and folders |
 | **Enter** | Open a folder or select a file |
-| **Backspace** | Go to the parent folder |
 | **Space** / **a** | Select a file / select all files here |
-| **Page Up / Down**, **Home / End** | Scroll quickly |
 | **o** | Choose an output folder; **Space** confirms it |
-| **f** | Toggle replacing existing Markdown |
 | **e** | Export selected files, or the highlighted file |
-| **r** / **b** | Refresh the browser / return from results |
+| **?** | Show all keys; **Esc** closes help |
 | **q** | Quit |
 
 By default, Markdown is saved beside each original. Press **Esc** to cancel the output-folder picker. To start browsing a different folder, use `xmind-md --tui maps`.

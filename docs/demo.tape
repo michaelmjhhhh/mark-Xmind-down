@@ -28,6 +28,12 @@ Down
 Down
 Sleep 1s
 Screenshot docs/images/terminal.png
+Type "?"
+Wait+Screen /Keyboard shortcuts/
+Sleep 1s
+Screenshot docs/images/help.png
+Type "?"
+Wait+Screen /XMind files/
 Type "e"
 Wait+Screen /Finished 3 file\(s\)/
 Sleep 1s

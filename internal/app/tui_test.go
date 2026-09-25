@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/michaelmjhhhh/mark-Xmind-down/internal/export"
 )
@@ -168,12 +170,12 @@ func TestTUIOverwriteToggleBeforeExport(t *testing.T) {
 				if cmd != nil || m.opts.force != want {
 					t.Fatalf("force=%v, want %v", m.opts.force, want)
 				}
-				state := "Overwrite: off"
+				state := "Replace off"
 				if want {
-					state = "Overwrite: on"
+					state = "Replace ON"
 				}
-				view := m.View().Content
-				if !strings.Contains(view, state) || !strings.Contains(view, "f: toggle overwrite") {
+				view := ansi.Strip(m.View().Content)
+				if !strings.Contains(view, state) || !strings.Contains(view, "[f]") {
 					t.Fatalf("missing overwrite state or hint: %s", view)
 				}
 				started, exportCmd := m.Update(key('e'))
@@ -207,8 +209,8 @@ func TestBrowserHintsFitStandardTerminal(t *testing.T) {
 	for range 30 {
 		m.entries = append(m.entries, browserEntry{name: "map.xmind", path: "map.xmind"})
 	}
-	view := m.View().Content
-	for _, hint := range []string{"e: export", "a: select all", "←: parent", "f: toggle overwrite", "q/Esc: quit"} {
+	view := ansi.Strip(m.View().Content)
+	for _, hint := range []string{"[e] Export", "[a] Select all", "[?] All keys", "[q] Quit"} {
 		if !strings.Contains(view, hint) {
 			t.Errorf("missing hint %q in standard terminal: %s", hint, view)
 		}
@@ -572,5 +574,118 @@ func TestTUIRefreshAndBatchReturnRestoreViewport(t *testing.T) {
 	m = model.(tuiModel)
 	if m.cursor != 25 || m.offset != 20 || len(m.allResults()) != 1 {
 		t.Fatalf("return from results moved source viewport or lost result: %+v", m)
+	}
+}
+
+func TestTUIHelpOpensAndClosesInEveryIdleMode(t *testing.T) {
+	for _, mode := range []string{"browser", "ready", "picker", "done", "loading"} {
+		for _, closeKey := range []rune{'?', tea.KeyEscape} {
+			t.Run(fmt.Sprintf("%s/%s", mode, key(closeKey).String()), func(t *testing.T) {
+				m := tuiModel{width: 80, height: 24, ready: mode == "ready", picker: mode == "picker", done: mode == "done", loading: mode == "loading", helpOffset: 17}
+				model, cmd := m.Update(key('?'))
+				m = model.(tuiModel)
+				if cmd != nil || !m.help || m.helpOffset != 0 {
+					t.Fatalf("help must open at the first row: %+v", m)
+				}
+				model, cmd = m.Update(key(closeKey))
+				m = model.(tuiModel)
+				if cmd != nil || m.help || m.picker != (mode == "picker") || m.done != (mode == "done") || m.ready != (mode == "ready") || m.loading != (mode == "loading") {
+					t.Fatalf("closing help must preserve underlying mode: %+v", m)
+				}
+			})
+		}
+	}
+	m := tuiModel{running: true}
+	model, cmd := m.Update(key('?'))
+	if cmd != nil || model.(tuiModel).help {
+		t.Fatal("help must not open during conversion")
+	}
+}
+
+func TestTUIHelpBlocksUnderlyingActions(t *testing.T) {
+	for _, mode := range []string{"browser", "ready", "picker", "done"} {
+		for _, code := range []rune{tea.KeySpace, tea.KeyEnter, 'e', 'a', 'o', 'f', 'r', 'b', tea.KeyLeft, tea.KeyRight, tea.KeyBackspace, 'h', 'l'} {
+			t.Run(fmt.Sprintf("%s/%s", mode, key(code).String()), func(t *testing.T) {
+				m := tuiModel{
+					width: 80, height: 12, help: true, directory: "source", cursor: 1,
+					ready: mode == "ready", picker: mode == "picker", done: mode == "done",
+					entries:  []browserEntry{{name: "folder", path: "source/folder", directory: true}, {name: "map.xmind", path: "source/map.xmind"}},
+					selected: map[string]bool{"source/map.xmind": true}, results: []outcome{{input: "source/map.xmind"}},
+					opts: options{outputDir: "destination"}, sourceDirectory: "source", sourceCursor: 1,
+				}
+				want := m
+				want.selected = map[string]bool{"source/map.xmind": true}
+				model, cmd := m.Update(key(code))
+				if cmd != nil || !reflect.DeepEqual(model.(tuiModel), want) {
+					t.Fatalf("key must not act on the underlying screen while help is open: %+v", model)
+				}
+			})
+		}
+	}
+}
+
+func TestTUIHelpEscapeClosesBeforeOutputPicker(t *testing.T) {
+	m := tuiModel{width: 80, height: 24, help: true, picker: true, directory: "destination", sourceDirectory: "source", selected: map[string]bool{"source/map.xmind": true}, opts: options{outputDir: "original"}}
+	model, cmd := m.Update(key(tea.KeyEscape))
+	m = model.(tuiModel)
+	if cmd != nil || m.help || !m.picker || m.directory != "destination" {
+		t.Fatal("first Escape should close help and leave the picker open")
+	}
+	model, cmd = m.Update(key(tea.KeyEscape))
+	m = model.(tuiModel)
+	if cmd != nil || m.picker || m.directory != "source" || m.opts.outputDir != "original" || !m.selected["source/map.xmind"] {
+		t.Fatal("second Escape should cancel the picker without changing output or selection")
+	}
+}
+
+func TestTUIHelpScrollsWithoutMovingUnderlyingCursor(t *testing.T) {
+	m := tuiModel{width: 40, height: 12, help: true, cursor: 5, offset: 2, entries: make([]browserEntry, 30)}
+	rows, last := m.helpVisibleRows(), max(0, len(m.helpContent())-m.helpVisibleRows())
+	if last < rows+1 {
+		t.Fatal("fixture must need more than one page of help")
+	}
+	for _, step := range []struct {
+		code rune
+		want int
+	}{
+		{tea.KeyDown, 1}, {'j', 2}, {tea.KeyUp, 1}, {'k', 0},
+		{tea.KeyPgDown, rows}, {tea.KeyPgDown, min(last, rows*2)},
+		{tea.KeyHome, 0}, {tea.KeyPgUp, 0}, {tea.KeyEnd, last},
+		{tea.KeyDown, last}, {tea.KeyPgUp, max(0, last-rows)},
+	} {
+		model, cmd := m.Update(key(step.code))
+		m = model.(tuiModel)
+		if cmd != nil || m.helpOffset != step.want || m.cursor != 5 || m.offset != 2 || !m.help {
+			t.Fatalf("%s: help offset=%d, want %d; underlying cursor/offset=%d/%d", key(step.code).String(), m.helpOffset, step.want, m.cursor, m.offset)
+		}
+	}
+	model, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 100})
+	m = model.(tuiModel)
+	if cmd != nil || !m.help || m.width != 120 || m.height != 100 || m.helpOffset != 0 {
+		t.Fatalf("resize should keep help open and clamp its scroll offset: %+v", m)
+	}
+}
+
+func TestTUIHelpPreservesQuitAndAsyncMessages(t *testing.T) {
+	for _, input := range []tea.KeyPressMsg{key('q'), {Code: 'c', Mod: tea.ModCtrl}} {
+		m := tuiModel{help: true}
+		model, cmd := m.Update(input)
+		if cmd == nil || model.(tuiModel).canceled != (input.String() == "ctrl+c") {
+			t.Fatalf("%s should retain normal quit behavior", input.String())
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatal("expected quit command")
+		}
+	}
+	m := tuiModel{ctx: context.Background(), help: true, loading: true, listingRequest: 7, width: 80, height: 24}
+	model, cmd := m.Update(listingMsg{directory: "loaded", entries: []browserEntry{{name: "map.xmind"}}, request: 7})
+	m = model.(tuiModel)
+	if cmd != nil || !m.help || m.loading || m.directory != "loaded" || len(m.entries) != 1 {
+		t.Fatal("help must not swallow asynchronous directory results")
+	}
+	model, cmd = m.Update(convertedMsg{input: "map.xmind"})
+	m = model.(tuiModel)
+	if cmd != nil || !m.help || !m.done || len(m.results) != 1 {
+		t.Fatal("help must not swallow asynchronous conversion results")
 	}
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,8 +13,13 @@ import (
 const (
 	tuiReset     = "\x1b[0m"
 	tuiAccent    = "\x1b[1;36m"
-	tuiMuted     = "\x1b[37m"
-	tuiHighlight = "\x1b[1;7m"
+	tuiSecondary = "\x1b[1;35m"
+	tuiSuccess   = "\x1b[1;32m"
+	tuiWarning   = "\x1b[1;33m"
+	tuiDanger    = "\x1b[1;31m"
+	tuiBold      = "\x1b[1m"
+	tuiMuted     = "\x1b[39m"
+	tuiHighlight = "\x1b[1;36;7m"
 )
 
 type viewRow struct {
@@ -23,11 +29,13 @@ type viewRow struct {
 // Keep navigation and rendering on the same page size, including compact
 // terminals. The reserved lines contain the destination and keyboard controls.
 func (m tuiModel) visibleRows() int {
-	if m.height < 18 {
-		return max(1, m.height-10)
+	if m.compactView() {
+		return max(1, m.height-9)
 	}
-	return max(1, m.height-11)
+	return max(1, m.height-12)
 }
+
+func (m tuiModel) compactView() bool { return m.height < 18 || m.width < 60 }
 
 func (m tuiModel) listBounds(total int) (int, int) {
 	if total <= 0 {
@@ -51,38 +59,32 @@ func (m tuiModel) View() tea.View {
 		if m.picker {
 			lines[2] = "Esc: back · Ctrl+C: quit"
 		}
+		if m.help {
+			lines[2] = "Esc: back · q: quit"
+		}
 		if m.running {
 			lines[2] = "q / Esc / Ctrl+C: cancel"
 		}
 		return tuiScreen(lines[:min(height, len(lines))], width)
 	}
+	if m.help {
+		return m.helpView()
+	}
 
 	mode, label, location, rows := m.viewRows()
-	output := "beside each input"
-	if m.opts.output != "" {
-		output = safe(m.opts.output)
-	} else if m.opts.outputDir != "" {
-		output = safe(m.opts.outputDir)
+	lines := []string{viewHeading("XMind → Markdown", mode, width)}
+	if !m.compactView() {
+		lines = append(lines, " "+m.viewSubtitle())
 	}
-	force := "off"
-	if m.opts.force {
-		force = "on"
+	if !m.running && !m.done && !m.ready {
+		location = "IN  " + shortPath(m.directory)
 	}
-	status := fmt.Sprintf("%d selected  ·  Overwrite: %s", len(m.selected), force)
-	if m.running || m.done {
-		succeeded := 0
-		for _, result := range m.results {
-			if result.err == nil {
-				succeeded++
-			}
-		}
-		status = fmt.Sprintf("%d exported  ·  %d failed  ·  Overwrite: %s", succeeded, len(m.results)-succeeded, force)
+	lines = append(lines, " "+tuiMuted+location+tuiReset)
+	if !m.compactView() {
+		lines = append(lines, "")
 	}
-	lines := []string{
-		viewHeading("XMind → Markdown", mode, width),
-		" Output: " + output,
-		" " + status,
-		" " + location,
+	if !m.running && !m.done && !m.picker {
+		label += fmt.Sprintf(" · %d selected", len(m.selected))
 	}
 
 	// The frame leaves one column of margin on both sides. Its rightmost inner
@@ -115,6 +117,8 @@ func (m tuiModel) View() tea.View {
 		text = viewPad(text, textWidth)
 		if highlighted {
 			text = tuiHighlight + text + tuiReset
+		} else if index < end {
+			text = colorRow(text)
 		}
 		scroll := viewScrollbar(row, m.visibleRows(), len(rows), start)
 		lines = append(lines, " "+tuiMuted+"│"+tuiReset+" "+text+" "+scroll+tuiMuted+"│"+tuiReset)
@@ -127,39 +131,120 @@ func (m tuiModel) View() tea.View {
 		}
 	}
 	lines = append(lines, " "+viewBorder("╰", "╯", position, paneWidth))
-	detail := "Images are saved in assets/ beside the Markdown."
-	if len(rows) > 0 {
-		detail = rows[cursor].detail
-	}
-	if m.picker {
-		detail = "Choose current folder: " + safe(m.directory)
-	}
-	message := m.message
-	if message == "" {
-		switch {
-		case m.picker:
-			message = "Space chooses this folder; Esc keeps your current output location."
-		case m.done:
-			message = "b opens the browser again. Full results and warnings print on exit."
-		case m.running && m.canceled:
-			message = "Canceling… waiting for the current export to finish cleanup."
-		case m.running:
-			message = "Exporting Markdown and images…"
-		case m.ready:
-			message = "Enter exports these files. Choose another destination with o."
-		default:
-			message = "e exports the highlighted file, or all selected files."
-		}
-	}
-	if height >= 18 {
-		lines = append(lines, " "+tuiMuted+detail+tuiReset, " "+safe(message))
-	} else if m.message != "" || m.running {
-		lines = append(lines, " "+safe(message))
-	} else {
-		lines = append(lines, " "+tuiMuted+detail+tuiReset)
+	lines = append(lines, " "+m.viewNotice(rows, cursor), " "+m.viewDestination(width))
+	if !m.compactView() {
+		lines = append(lines, "")
 	}
 	lines = append(lines, m.viewFooter(width)...)
 	return tuiScreen(lines, width)
+}
+
+func shortPath(path string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if path == home {
+			return "~"
+		}
+		if strings.HasPrefix(path, home+string(filepath.Separator)) {
+			path = "~" + strings.TrimPrefix(path, home)
+		}
+	}
+	return safe(path)
+}
+
+func (m tuiModel) viewSubtitle() string {
+	switch {
+	case m.picker:
+		return tuiSecondary + "Choose where to save your Markdown" + tuiReset
+	case m.running:
+		return tuiAccent + "Exporting Markdown and images…" + tuiReset
+	case m.done:
+		success, failed := 0, 0
+		for _, result := range m.results {
+			if result.err == nil {
+				success++
+			} else {
+				failed++
+			}
+		}
+		text := tuiSuccess + fmt.Sprintf("✓ %d exported", success) + tuiReset
+		if failed > 0 {
+			text += "   " + tuiDanger + fmt.Sprintf("✗ %d failed", failed) + tuiReset
+		}
+		return text
+	case m.ready:
+		return tuiBold + "Your files are ready to export" + tuiReset
+	default:
+		return tuiBold + "Choose your XMind files" + tuiReset
+	}
+}
+
+func (m tuiModel) viewNotice(rows []viewRow, cursor int) string {
+	if m.message != "" {
+		color, prefix := tuiWarning, "! "
+		if strings.HasPrefix(m.message, "Output folder selected.") {
+			return tuiSuccess + "✓ Output folder updated" + tuiReset
+		}
+		return color + prefix + safe(m.message) + tuiReset
+	}
+	if m.running && m.canceled {
+		return tuiWarning + "Canceling… finishing cleanup." + tuiReset
+	}
+	if (m.running || m.done) && len(rows) > 0 {
+		detail := rows[cursor].detail
+		if strings.HasPrefix(detail, "Saved:") {
+			return "" // The destination already has a dedicated line below.
+		}
+		color := tuiMuted
+		if strings.HasPrefix(detail, "Error:") {
+			color = tuiDanger
+		}
+		if strings.HasPrefix(detail, "Warning:") {
+			color = tuiWarning
+		}
+		return color + detail + tuiReset
+	}
+	// Avoid repeating the selected path. Reveal the full name only when its row
+	// is too short to show it, and reserve this line for actionable notifications.
+	if len(rows) > 0 && ansi.StringWidth(rows[cursor].text) > m.width-9 {
+		return tuiMuted + rows[cursor].text + tuiReset
+	}
+	return ""
+}
+
+func (m tuiModel) viewDestination(width int) string {
+	output := "beside each source"
+	if m.opts.output != "" {
+		output = shortPath(m.opts.output)
+	} else if m.opts.outputDir != "" {
+		output = shortPath(m.opts.outputDir)
+	}
+	if m.picker {
+		return tuiSecondary + "SAVE TO  " + tuiReset + shortPath(m.directory)
+	}
+	left := tuiSecondary + "SAVE TO  " + tuiReset + output
+	if width < 60 && m.opts.force && !m.running && !m.done {
+		right := tuiWarning + "Replace ON" + tuiReset
+		return viewPad(left, width-3-ansi.StringWidth(right)) + " " + right
+	}
+	if width < 60 || m.running || m.done {
+		return left
+	}
+	state, color := "off", tuiMuted
+	if m.opts.force {
+		state, color = "ON", tuiWarning
+	}
+	right := viewKey("f", tuiSecondary) + " Replace " + color + state + tuiReset
+	available := width - 2 - ansi.StringWidth(right) - 3
+	return viewPad(left, available) + "   " + right
+}
+
+func colorRow(text string) string {
+	for _, marker := range []struct{ token, color string }{{"[x]", tuiSuccess}, {"▸", tuiSecondary}, {"✓", tuiSuccess}, {"✗", tuiDanger}, {"…", tuiAccent}} {
+		if i := strings.Index(text, marker.token); i >= 0 && i < 6 {
+			return text[:i] + marker.color + marker.token + tuiReset + text[i+len(marker.token):]
+		}
+	}
+	return text
 }
 
 func (m tuiModel) viewRows() (mode, label, location string, rows []viewRow) {
@@ -229,52 +314,227 @@ func (m tuiModel) emptyMessage() string {
 	return "No .xmind files or subfolders here."
 }
 
+func viewKey(key, color string) string {
+	return color + "[" + key + "]" + tuiReset
+}
+
+func viewAction(key, label, color string, primary bool) string {
+	style := color
+	if primary {
+		style += "\x1b[7m"
+	}
+	return viewKey(key, style) + " " + label
+}
+
 func (m tuiModel) viewFooter(width int) []string {
-	var lines []string
+	gap := "   "
+	if width < 60 {
+		gap = " "
+	}
+	helpLabel, outputLabel := "All keys", "Output folder"
+	if width < 60 {
+		helpLabel, outputLabel = "Keys", "Output"
+	}
+	help := viewAction("?", helpLabel, tuiSecondary, false)
+	quit := viewAction("q", "Quit", tuiMuted, false)
+	move := viewAction("↑↓", "Move", tuiAccent, false)
+	var primary, navigation, more string
 	switch {
 	case m.running:
-		lines = []string{"q / Esc / Ctrl+C: cancel", "", ""}
+		primary = viewAction("Ctrl+C", "Cancel export", tuiWarning, true)
 	case m.done:
-		lines = []string{"↑/↓: inspect · PgUp/PgDn: page · Home/End: jump", "b: browse more files", "Enter/q/Esc: close"}
+		primary = viewAction("b", "Browse more", tuiAccent, true)
+		navigation = viewAction("↑↓", "Inspect results", tuiAccent, false)
+		more = help + gap + viewAction("q", "Close", tuiMuted, false)
 	case m.picker:
-		lines = []string{"↑/↓: move · PgUp/PgDn: page · Home/End: jump", "Enter/→: open folder · ←: parent", "Space: use this folder · Esc: back · Ctrl+C: quit"}
-	case m.ready:
-		lines = []string{"↑/↓: move · PgUp/PgDn: page · Home/End: jump", "Enter/e: export · o: output folder", "f: toggle overwrite · q/Esc: quit"}
-	default:
-		lines = []string{"↑/↓: move · PgUp/PgDn: page · Home/End: jump · ←: parent", "Enter: open/select · Space: select · a: select all · e: export", "o: output folder · f: toggle overwrite · q/Esc: quit"}
-		if width >= 75 {
-			lines[0] += " · r: refresh"
+		primary = viewAction("Space", "Use this folder", tuiSecondary, true)
+		navigation = move + gap + viewAction("Enter", "Open", tuiAccent, false)
+		more = viewAction("Esc", "Back", tuiMuted, false) + gap + help
+		if width >= 60 {
+			navigation += gap + viewAction("←", "Parent", tuiAccent, false)
 		}
-	}
-	if width < 65 {
-		switch {
-		case m.running:
-			lines = []string{"q / Esc / Ctrl+C: cancel", "", ""}
-		case m.done:
-			lines = []string{"↑↓: inspect · PgUp/PgDn: page", "b: browse more files", "Enter/q/Esc: close"}
-		case m.picker:
-			lines = []string{"↑↓: move · Enter: open", "Space: use current folder", "←: parent · Esc: back"}
-		case m.ready:
-			lines = []string{"↑↓: move · Enter/e: export", "o: output · f: overwrite", "q/Esc: quit"}
-		default:
-			lines = []string{"↑↓ move · Enter open/select", "Space select · e export · o output", "← parent · f overwrite · q quit"}
-			if width < 35 {
-				lines = []string{"↑↓ move · Enter open/select", "Space select · e export", "o output · f force · q quit"}
+	default:
+		key, label := "e", "Export file"
+		if len(m.selected) > 0 {
+			label = fmt.Sprintf("Export %d files", len(m.selected))
+			if len(m.selected) == 1 {
+				label = "Export 1 file"
 			}
 		}
+		if width < 60 {
+			label = "Export"
+		}
+		if m.ready {
+			key = "Enter"
+		}
+		folder := !m.ready && m.cursor >= 0 && m.cursor < len(m.entries) && m.entries[m.cursor].directory
+		if folder && len(m.selected) == 0 {
+			key, label = "Enter", "Open folder"
+		}
+		if m.loading {
+			primary = tuiMuted + "Loading files…" + tuiReset
+		} else if len(m.entries) == 0 && len(m.selected) == 0 {
+			primary = tuiMuted + "Choose a file to export" + tuiReset
+		} else {
+			primary = viewAction(key, label, tuiAccent, true)
+		}
+		output := viewAction("o", outputLabel, tuiSecondary, false)
+		if ansi.StringWidth(primary+gap+output) < width-1 {
+			primary += gap + output
+		} else {
+			// A long primary action never hides destination selection in a small terminal.
+			more = output + gap
+		}
+		navigation = move
+		if !m.ready {
+			if len(m.entries) == 0 {
+				navigation = viewAction("r", "Refresh", tuiAccent, false)
+			} else if folder {
+				navigation += gap + viewAction("←", "Parent", tuiAccent, false)
+			} else {
+				verb := "Select"
+				if m.cursor >= 0 && m.cursor < len(m.entries) && m.selected[m.entries[m.cursor].path] {
+					verb = "Deselect"
+				}
+				navigation += gap + viewAction("Space", verb, tuiAccent, false)
+			}
+			if width >= 60 {
+				files, selected := 0, 0
+				for _, entry := range m.entries {
+					if !entry.directory {
+						files++
+						if m.selected[entry.path] {
+							selected++
+						}
+					}
+				}
+				if files > 0 {
+					label := "Select all"
+					if selected == files {
+						label = "Deselect all"
+					}
+					navigation += gap + viewAction("a", label, tuiAccent, false)
+				}
+			}
+		}
+		more += help + gap + quit
 	}
-	for i := range lines {
-		lines[i] = " " + tuiMuted + lines[i] + tuiReset
+	return []string{" " + primary, " " + navigation, " " + more}
+}
+
+// Full help is grouped by task. Compact terminals wrap and scroll the same
+// content; no shortcut disappears just because the terminal is small.
+func (m tuiModel) helpVisibleRows() int { return max(1, m.height-6) }
+
+func (m tuiModel) helpContent() []string {
+	width := max(20, m.width-4)
+	var lines []string
+	section := func(title string) {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, tuiSecondary+title+tuiReset)
 	}
+	binding := func(key, label string) {
+		keyText := viewKey(key, tuiAccent)
+		if width >= 76 {
+			lines = append(lines, viewPad(keyText, 23)+label)
+		} else {
+			lines = append(lines, keyText)
+			words := strings.Fields(label)
+			line := "  "
+			for _, word := range words {
+				if ansi.StringWidth(line+word) > width {
+					lines = append(lines, strings.TrimRight(line, " "))
+					line = "  "
+				}
+				line += word + " "
+			}
+			lines = append(lines, strings.TrimRight(line, " "))
+		}
+	}
+	section("NAVIGATE")
+	binding("↑ ↓ / k j", "Move through the list")
+	binding("PgUp PgDn / Home End", "Page through files / jump to ends")
+	switch {
+	case m.done:
+		section("RESULTS")
+		binding("b", "Browse more files")
+		binding("Enter / q / Esc", "Close; print full results and warnings")
+	case m.picker:
+		binding("Enter / → / l", "Open a folder")
+		binding("← / Backspace / h", "Go to the parent folder")
+		section("DESTINATION")
+		binding("Space", "Use the current folder")
+		binding("Esc", "Back without changing the destination")
+		binding("r", "Refresh folders")
+	case m.ready:
+		section("EXPORT")
+		binding("Enter / e", "Export the prepared selection")
+		section("OUTPUT")
+		binding("o", "Choose an output folder")
+		binding("f", "Toggle replacing existing Markdown")
+	default:
+		binding("Enter / → / l", "Open a folder; Enter also selects files")
+		binding("← / Backspace / h", "Go to the parent folder")
+		section("SELECT & EXPORT")
+		binding("Space / Enter", "Select or deselect a file")
+		binding("a", "Select or deselect all files here")
+		binding("e", "Export selected files, or the highlighted file")
+		section("OUTPUT & TOOLS")
+		binding("o", "Choose an output folder")
+		binding("f", "Toggle replacing existing Markdown")
+		binding("r", "Refresh files")
+	}
+	section("SESSION")
+	if m.picker {
+		binding("q / Ctrl+C", "Quit")
+	} else if !m.done {
+		binding("q / Esc / Ctrl+C", "Quit")
+	} else {
+		binding("Ctrl+C", "Quit")
+	}
+	binding("? / Esc", "Close this help; resume where you left off")
 	return lines
+}
+
+func (m tuiModel) helpView() tea.View {
+	lines := []string{viewHeading("Keyboard shortcuts", "HELP", m.width), " " + tuiMuted + "Keys for the current screen" + tuiReset, ""}
+	content := m.helpContent()
+	count := m.helpVisibleRows()
+	start := min(max(0, m.helpOffset), max(0, len(content)-count))
+	end := min(len(content), start+count)
+	for i := start; i < end; i++ {
+		lines = append(lines, " "+content[i])
+	}
+	for len(lines) < 3+count {
+		lines = append(lines, "")
+	}
+	position := ""
+	if len(content) > count {
+		position = fmt.Sprintf(" %d–%d of %d", start+1, end, len(content))
+	}
+	lines = append(lines, tuiMuted+position+tuiReset, " "+viewAction("↑↓", "Scroll", tuiAccent, false)+"  "+viewAction("Esc", "Back", tuiSecondary, true), " "+viewAction("?", "Back", tuiSecondary, false)+"  "+viewAction("q", "Quit", tuiMuted, false))
+	return tuiScreen(lines, m.width)
 }
 
 func viewHeading(title, mode string, width int) string {
 	available := width - 2
-	if ansi.StringWidth(title)+ansi.StringWidth(mode)+2 > available {
+	color := tuiAccent
+	switch mode {
+	case "OUTPUT FOLDER", "HELP":
+		color = tuiSecondary
+	case "COMPLETE":
+		color = tuiSuccess
+	}
+	badge := color + "\x1b[7m " + mode + " " + tuiReset
+	if width < 50 && title == "XMind → Markdown" {
+		title = "XMind → MD"
+	}
+	if ansi.StringWidth(title)+ansi.StringWidth(badge)+2 > available {
 		return " " + tuiAccent + title + tuiReset
 	}
-	return " " + tuiAccent + title + tuiReset + strings.Repeat(" ", available-ansi.StringWidth(title)-ansi.StringWidth(mode)) + tuiMuted + mode + tuiReset
+	return " " + tuiAccent + title + tuiReset + strings.Repeat(" ", available-ansi.StringWidth(title)-ansi.StringWidth(badge)) + badge
 }
 
 func viewBorder(left, right, label string, width int) string {

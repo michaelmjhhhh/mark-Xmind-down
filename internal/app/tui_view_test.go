@@ -86,14 +86,14 @@ func TestBrowserViewportStaysPutWhenMovingWithinPage(t *testing.T) {
 		t.Fatalf("moving within the page scrolled it: [%d,%d) → [%d,%d)", start, end, nextStart, nextEnd)
 	}
 	plain := ansi.Strip(m.View().Content)
-	if !strings.Contains(plain, "> [ ] map-019.xmind") || !strings.Contains(plain, "r: refresh") {
+	if !strings.Contains(plain, "> [ ] map-019.xmind") || !strings.Contains(plain, "[?] All keys") {
 		t.Fatalf("missing cursor or refresh control:\n%s", plain)
 	}
 }
 
 func TestTUIViewFitsTerminalAndKeepsEssentialControls(t *testing.T) {
 	for _, size := range [][2]int{{80, 24}, {40, 12}, {30, 12}, {120, 40}, {20, 8}, {1, 1}} {
-		for _, mode := range []string{"browser", "picker", "ready", "running", "done"} {
+		for _, mode := range []string{"browser", "picker", "ready", "running", "done", "help"} {
 			t.Run(fmt.Sprintf("%dx%d/%s", size[0], size[1], mode), func(t *testing.T) {
 				m := viewFixture(40)
 				m.width, m.height, m.cursor = size[0], size[1], 25
@@ -104,6 +104,8 @@ func TestTUIViewFitsTerminalAndKeepsEssentialControls(t *testing.T) {
 				m.selected[m.entries[25].path] = true
 				m.message = strings.Repeat("Important message. ", 30)
 				switch mode {
+				case "help":
+					m.help = true
 				case "picker":
 					m.picker = true
 				case "ready":
@@ -130,15 +132,17 @@ func TestTUIViewFitsTerminalAndKeepsEssentialControls(t *testing.T) {
 					var controls []string
 					switch mode {
 					case "browser":
-						controls = []string{"e", "export", "Space", "o", "output", "q", "quit"}
+						controls = []string{"[e]", "Export", "[Space]", "[o]", "Output", "[q]", "Quit", "[?]"}
 					case "picker":
-						controls = []string{"Space", "folder", "Esc", "back"}
+						controls = []string{"[Space]", "folder", "[Esc]", "Back", "[?]"}
 					case "ready":
-						controls = []string{"Enter/e", "export", "q/Esc", "quit"}
+						controls = []string{"[Enter]", "Export", "[q]", "Quit", "[?]"}
 					case "running":
-						controls = []string{"Ctrl+C", "cancel"}
+						controls = []string{"[Ctrl+C]", "Cancel"}
 					case "done":
-						controls = []string{"b:", "browse", "Enter/q/Esc", "close"}
+						controls = []string{"[b]", "Browse", "[q]", "Close", "[?]"}
+					case "help":
+						controls = []string{"[Esc]", "Back", "[q]", "Quit", "Scroll"}
 					}
 					for _, text := range controls {
 						if !strings.Contains(plain, text) {
@@ -186,7 +190,7 @@ func TestResultViewScrollsAndShowsCurrentError(t *testing.T) {
 	}
 	m.results[29].err = errors.New("destination is not writable")
 	plain := ansi.Strip(m.View().Content)
-	for _, want := range []string{"Finished 30", "30 / 30", "> ✗ map-29.xmind", "Error: destination is not writable", "b: browse more files"} {
+	for _, want := range []string{"Finished 30", "30 / 30", "> ✗ map-29.xmind", "Error: destination is not writable", "[b] Browse more"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("missing %q:\n%s", want, plain)
 		}
@@ -199,7 +203,7 @@ func TestOutputPickerTakesPrecedenceOverPreparedInputs(t *testing.T) {
 	m.selected["/maps/map.xmind"] = true
 	m.entries = []browserEntry{{name: "exports", path: "/maps/exports", directory: true}}
 	plain := ansi.Strip(m.View().Content)
-	for _, want := range []string{"OUTPUT FOLDER", "1 selected", "▸ exports/", "Space: use this folder", "Esc: back"} {
+	for _, want := range []string{"OUTPUT FOLDER", "▸ exports/", "[Space] Use this folder", "[Esc] Back"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("missing %q:\n%s", want, plain)
 		}

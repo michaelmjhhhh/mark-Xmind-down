@@ -1,0 +1,260 @@
+// Package export converts XMind documents to deterministic Markdown and assets.
+package export
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io/fs"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/michaelmjhhhh/mark-Xmind-down/internal/xmind"
+)
+
+type Options struct {
+	Output string
+	Force  bool
+}
+
+type Result struct {
+	Output   string
+	Topics   int
+	Images   int
+	Sheets   int
+	Warnings []string
+}
+
+// Convert validates and renders everything before publishing any output.
+// Embedded resources retain their original bytes and use SHA-256 filenames.
+func Convert(ctx context.Context, input string, opts Options) (Result, error) {
+	result := Result{Output: opts.Output}
+	if result.Output == "" {
+		result.Output = strings.TrimSuffix(input, filepath.Ext(input)) + ".md"
+	}
+	if !strings.EqualFold(filepath.Ext(result.Output), ".md") {
+		return result, errors.New("output filename must end in .md")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	inputAbs, err := filepath.Abs(input)
+	if err != nil {
+		return result, err
+	}
+	outputAbs, err := filepath.Abs(result.Output)
+	if err != nil {
+		return result, err
+	}
+	if strings.EqualFold(inputAbs, outputAbs) {
+		return result, errors.New("output must differ from input")
+	}
+	if info, err := os.Lstat(outputAbs); err == nil {
+		if !info.Mode().IsRegular() {
+			return result, fmt.Errorf("output is not a regular file: %s", result.Output)
+		}
+		if !opts.Force {
+			return result, fmt.Errorf("output already exists: %s (use --force to replace)", result.Output)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return result, err
+	}
+	a, err := xmind.Open(input)
+	if err != nil {
+		return result, err
+	}
+	defer a.Close()
+	r := newRenderer(ctx, a)
+	markdown, err := r.render()
+	if err != nil {
+		return result, err
+	}
+	result.Topics, result.Images, result.Sheets = r.topics, len(r.images), len(a.Document.Sheets)
+	result.Warnings = append(result.Warnings, a.Document.Warnings...)
+	result.Warnings = append(result.Warnings, r.warnings...)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if err := os.MkdirAll(filepath.Dir(outputAbs), 0755); err != nil {
+		return result, fmt.Errorf("create output directory: %w", err)
+	}
+	root, err := os.OpenRoot(filepath.Dir(outputAbs))
+	if err != nil {
+		return result, err
+	}
+	defer root.Close()
+	if err := publishAssets(ctx, root, r.assets); err != nil {
+		return result, err
+	}
+	if err := publishMarkdown(ctx, root, filepath.Base(outputAbs), []byte(markdown), opts.Force); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func assetExtension(name string, data []byte, isImage bool) string {
+	if isImage {
+		switch http.DetectContentType(data) {
+		case "image/png":
+			return ".png"
+		case "image/jpeg":
+			return ".jpg"
+		case "image/gif":
+			return ".gif"
+		case "image/webp":
+			return ".webp"
+		case "image/bmp":
+			return ".bmp"
+		case "image/x-icon":
+			return ".ico"
+		}
+	}
+	ext := strings.ToLower(path.Ext(name))
+	if len(ext) > 1 && len(ext) <= 12 {
+		valid := true
+		for _, c := range ext[1:] {
+			if c < 'a' || c > 'z' {
+				if c < '0' || c > '9' {
+					valid = false
+				}
+			}
+		}
+		if valid {
+			return ext
+		}
+	}
+	return ".bin"
+}
+
+func assetName(name string, data []byte, isImage bool) string {
+	return fmt.Sprintf("%x%s", sha256.Sum256(data), assetExtension(name, data, isImage))
+}
+
+func publishAssets(ctx context.Context, root *os.Root, assets map[string][]byte) error {
+	if len(assets) == 0 {
+		return nil
+	}
+	if info, err := root.Lstat("assets"); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("assets output path must be a real directory, not a symlink")
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := root.MkdirAll("assets", 0755); err != nil {
+		return err
+	}
+	dir, err := root.OpenRoot("assets")
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	names := make([]string, 0, len(assets))
+	for name := range assets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	// Preflight all existing assets before writing anything; --force never replaces assets.
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if info, err := dir.Lstat(name); err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("asset is not a regular file: %s", name)
+			}
+			if info.Size() != int64(len(assets[name])) {
+				return fmt.Errorf("existing asset conflicts with its content hash: %s", name)
+			}
+			data, err := dir.ReadFile(name)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(data, assets[name]) {
+				return fmt.Errorf("existing asset conflicts with its content hash: %s", name)
+			}
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		f, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if errors.Is(err, fs.ErrExist) {
+			// Recheck after a concurrent writer: never silently accept corrupt bytes.
+			info, e := dir.Lstat(name)
+			if e != nil || !info.Mode().IsRegular() || info.Size() != int64(len(assets[name])) {
+				return fmt.Errorf("asset changed during export: %s", name)
+			}
+			data, e := dir.ReadFile(name)
+			if e != nil || !bytes.Equal(data, assets[name]) {
+				return fmt.Errorf("asset changed during export: %s", name)
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, writeErr := f.Write(assets[name])
+		if writeErr == nil {
+			writeErr = f.Sync()
+		}
+		closeErr := f.Close()
+		if writeErr != nil || closeErr != nil {
+			_ = dir.Remove(name)
+			return errors.Join(writeErr, closeErr)
+		}
+	}
+	return nil
+}
+
+func publishMarkdown(ctx context.Context, root *os.Root, name string, data []byte, force bool) error {
+	temp := ".xmind-md-" + rand.Text() + ".tmp"
+	f, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(temp)
+	_, writeErr := f.Write(data)
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		return errors.Join(writeErr, closeErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !force {
+		// Reserve exclusively so even simultaneous exports cannot overwrite a file.
+		reservation, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			return fmt.Errorf("create output (use --force if it already exists): %w", err)
+		}
+		if err := reservation.Close(); err != nil {
+			_ = root.Remove(name)
+			return err
+		}
+		if err := root.Rename(temp, name); err != nil {
+			_ = root.Remove(name)
+			return err
+		}
+		return nil
+	}
+	if info, err := root.Lstat(name); err == nil && !info.Mode().IsRegular() {
+		return errors.New("refusing to replace non-regular output file")
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return root.Rename(temp, name)
+}

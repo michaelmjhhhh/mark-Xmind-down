@@ -35,31 +35,30 @@ type outcome struct {
 const usage = `xmind-md — export XMind maps to Markdown with local images
 
 Usage:
+  xmind-md                    Open the interactive file browser
   xmind-md [flags] INPUT...
-  xmind-md --tui [flags] [INPUT...]
 
-Inputs are .xmind files or directories. Quoted globs are supported.
-Markdown is written beside each input by default; images go in assets/
-beside the Markdown file. Existing files require --force to replace.
-With no inputs, an interactive terminal opens the file browser.
+Examples:
+  xmind-md "My Map.xmind"      Convert one file
+  xmind-md maps -d exports     Convert a folder into exports/
+  xmind-md maps -r -d exports  Include subfolders
+  xmind-md "My Map.xmind" -f   Replace an earlier export
+
+Output: My Map.md beside the input, with images in assets/ beside it.
+Keep the Markdown and assets/ together when moving or sharing them.
 
 Flags:
-  -o, --output FILE       Markdown destination for exactly one input
-  -d, --output-dir DIR    Destination directory for all Markdown files
-  -r, --recursive         Search input directories recursively
+  -o, --output FILE       Save one map to a specific .md file
+  -d, --output-dir DIR    Save all Markdown files in this folder
+  -r, --recursive         Include subfolders
   -f, --force             Replace existing Markdown output
-      --tui               Open the interactive Bubble Tea interface
+      --tui               Choose files interactively (requires a terminal)
   -h, --help              Show this help
       --version           Show version
       --                  Treat all following arguments as paths
 
-Examples:
-  xmind-md "My Map.xmind"
-  xmind-md assets --recursive --output-dir exported
-  xmind-md "assets/*.xmind" --output-dir exported
-  xmind-md --tui --output-dir exported
-
-Exit codes: 0 success, 1 conversion/input failure, 2 usage error, 130 canceled.
+Inputs can be files, folders, or quoted globs ("maps/*.xmind").
+Flags work before or after inputs. Existing files are kept unless -f is used.
 `
 
 // Run executes the CLI. It does not close streams or terminate the process.

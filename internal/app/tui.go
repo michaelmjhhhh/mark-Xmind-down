@@ -146,6 +146,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if key == "f" {
+			m.opts.force = !m.opts.force
+			m.message = ""
+			return m, nil
+		}
 		if m.ready {
 			switch key {
 			case "enter", "e":
@@ -230,8 +235,14 @@ func (m tuiModel) selectedPaths() []string {
 
 func (m tuiModel) start() (tea.Model, tea.Cmd) {
 	paths := m.selectedPaths()
+	if len(paths) == 0 && !m.ready && m.cursor >= 0 && m.cursor < len(m.entries) {
+		entry := m.entries[m.cursor]
+		if !entry.directory && isXMind(entry.path) {
+			paths = []string{entry.path}
+		}
+	}
 	if len(paths) == 0 {
-		m.message = "Select one or more .xmind files with Space first."
+		m.message = "Highlight a .xmind file or select files with Space."
 		return m, nil
 	}
 	jobs, err := planJobs(paths, m.opts)
@@ -262,12 +273,12 @@ func (m tuiModel) View() tea.View {
 		b.WriteString("Output: beside each input  ·  images: assets/\n")
 	}
 	if m.opts.force {
-		b.WriteString("Overwrite: enabled\n")
+		b.WriteString("Overwrite: on (replace existing Markdown)\n")
 	} else {
-		b.WriteString("Overwrite: disabled\n")
+		b.WriteString("Overwrite: off (keep existing files)\n")
 	}
 	b.WriteString("\n")
-	rows := max(1, m.height-12)
+	rows := max(1, m.height-13)
 	switch {
 	case m.running || m.done:
 		if m.done {
@@ -301,7 +312,7 @@ func (m tuiModel) View() tea.View {
 		for _, path := range paths[start:min(len(paths), start+rows)] {
 			fmt.Fprintf(&b, "  %s\n", safe(path))
 		}
-		b.WriteString("\nEnter/e: export · ↑/↓: scroll · q/Esc: cancel")
+		b.WriteString("\nEnter/e: export · ↑/↓: scroll\nf: toggle overwrite · q/Esc: cancel")
 	default:
 		fmt.Fprintf(&b, "%s\n\n", safe(m.directory))
 		if m.loading {
@@ -326,7 +337,8 @@ func (m tuiModel) View() tea.View {
 			fmt.Fprintf(&b, "%s [%s] %s%s\n", cursor, mark, safe(entry.name), suffix)
 		}
 		fmt.Fprintf(&b, "\n%d selected · ↑/↓ move · Enter open/select · Space select\n", len(m.selected))
-		b.WriteString("a: select all here · ←: parent · e: export · q/Esc: quit")
+		b.WriteString("e: export selected or highlighted · a: select all · ←: parent\n")
+		b.WriteString("f: toggle overwrite · q/Esc: quit")
 	}
 	if m.message != "" {
 		fmt.Fprintf(&b, "\n\n%s", safe(m.message))

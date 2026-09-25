@@ -80,3 +80,7 @@ env -u NO_COLOR COLORTERM=truecolor vhs docs/demo-gif.tape
 ```
 
 [Changelog](CHANGELOG.md) · [QA report](docs/qa-report.md) · [Format research](docs/research.md) · [Contributing changes](docs/reference.md#development-and-verification)
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

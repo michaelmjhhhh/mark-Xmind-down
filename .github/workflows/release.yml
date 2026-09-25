@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ github.ref_name }}
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: xmind-md-*
+          path: dist
+          merge-multiple: true
+      - name: Verify assets and create checksums
+        working-directory: dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            xmind-md-darwin-amd64
+            xmind-md-darwin-arm64
+            xmind-md-linux-amd64
+            xmind-md-linux-arm64
+            xmind-md-windows-amd64.exe
+            xmind-md-windows-arm64.exe
+          )
+          test "$(find . -type f | wc -l)" -eq "${#expected[@]}"
+          for asset in "${expected[@]}"; do
+            test -s "$asset"
+          done
+          sha256sum "${expected[@]}" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish complete release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "Release $RELEASE_TAG is already published; refusing to replace its assets." >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
+
+  install:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      XMIND_MD_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and run on macOS and Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          source scripts/install.sh
+          test "$(xmind-md --version)" = "xmind-md $XMIND_MD_VERSION"
+      - name: Install and run on Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          & ./scripts/install.ps1
+          if ((xmind-md --version) -ne "xmind-md $env:XMIND_MD_VERSION") {
+            throw 'Installed binary does not report the release version.'
+          }

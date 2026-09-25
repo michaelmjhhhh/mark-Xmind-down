@@ -10,13 +10,21 @@ Convert XMind files to Markdown, with images saved in a linked `assets/` folder.
 
 ## Install
 
-With [Go 1.26.7+](https://go.dev/dl/) installed:
+No Go installation or administrator access needed. The installer configures PATH automatically for this terminal and future sessions.
+
+**macOS / Linux** (Bash or Zsh):
 
 ```sh
-go install github.com/michaelmjhhhh/mark-Xmind-down/cmd/xmind-md@latest
+source <(curl -fsSL https://raw.githubusercontent.com/michaelmjhhhh/mark-Xmind-down/main/scripts/install.sh || printf 'return 1\n')
 ```
 
-If `xmind-md` is not found, add your Go binary directory to `PATH`—normally `~/go/bin`, or `%USERPROFILE%\go\bin` on Windows. See [build from source](docs/reference.md#build-and-run) for an alternative.
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/michaelmjhhhh/mark-Xmind-down/main/scripts/install.ps1 | iex
+```
+
+Run `xmind-md` to start. Re-run the installer to update. See [other shells and source builds](docs/reference.md#installation) for alternatives.
 
 ## Convert
 

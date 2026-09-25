@@ -4,6 +4,25 @@ For installation and the common commands, start with the [README](../README.md).
 
 Convert XMind mind maps into portable Markdown, with embedded images copied byte-for-byte into an `assets/` directory beside each Markdown file. A single Go binary provides batch conversion and a [Charmbracelet Bubble Tea](https://github.com/charmbracelet/bubbletea) terminal interface.
 
+## Installation
+
+The [README installers](../README.md#install) download the latest release for macOS, Linux, or Windows (amd64/arm64), verify its SHA-256 checksum, and install for the current user. Go and administrator access are not required.
+
+- macOS/Linux: `~/.local/bin/xmind-md`. The sourced installer updates the current PATH and adds an idempotent block to your shell's startup files. Bash login/interactive files and Zsh's `ZDOTDIR` are respected.
+- Windows: `%LOCALAPPDATA%\Programs\xmind-md\xmind-md.exe`. The installer updates the current process and persistent User PATH, preserving other entries.
+
+Re-run the same installer to update. Set `XMIND_MD_VERSION` to a release tag such as `v0.1.0` to install a specific version. Checksum or download failures leave the previous executable intact.
+
+For Fish, this also configures the current shell automatically:
+
+```fish
+curl -fsSL https://raw.githubusercontent.com/michaelmjhhhh/mark-Xmind-down/main/scripts/install.sh | sh; and source "$__fish_config_dir/conf.d/xmind-md.fish"
+```
+
+For a POSIX shell, download the installer and source it for immediate use, or run it with `sh` and start a new login session; `.profile` is configured automatically. No manual PATH edits are needed.
+
+To uninstall, remove the executable and its marked `xmind-md PATH` startup block (or its directory from Windows User PATH). See [GitHub Releases](https://github.com/michaelmjhhhh/mark-Xmind-down/releases) for direct binary downloads and checksums.
+
 ## Build and run
 
 Requires **Go 1.26.7 or newer** to build. The compiled executable has no Go, Python, Node.js, XMind, or network requirement at runtime.
@@ -30,7 +49,7 @@ go build -trimpath -o bin/xmind-md.exe ./cmd/xmind-md
 .\bin\xmind-md.exe assets --output-dir exports
 ```
 
-Install directly from [GitHub](https://github.com/michaelmjhhhh/mark-Xmind-down) into your Go binary directory:
+For Go developers whose Go binary directory is already on PATH, direct installation also works:
 
 ```sh
 go install github.com/michaelmjhhhh/mark-Xmind-down/cmd/xmind-md@latest

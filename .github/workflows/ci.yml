@@ -2,7 +2,14 @@ name: Verify
 
 on:
   push:
+    branches: ['**']
   pull_request:
+  workflow_call:
+    inputs:
+      version:
+        description: Version embedded in the portable binaries
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +33,17 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./cmd/xmind-md
+      - name: Test installer on macOS and Linux
+        if: runner.os != 'Windows'
+        run: sh scripts/test-install.sh
+      - name: Test installer on Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: bash
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-install.ps1
+      - name: Test installer on PowerShell 7
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-install.ps1
 
   build:
     runs-on: ubuntu-latest
@@ -45,11 +63,13 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
+          BUILD_VERSION: ${{ inputs.version || github.sha }}
         run: |
           suffix=""
           if [ "$GOOS" = windows ]; then suffix=".exe"; fi
-          go build -trimpath -ldflags="-s -w -X main.version=${GITHUB_SHA::12}" -o "dist/xmind-md-$GOOS-$GOARCH$suffix" ./cmd/xmind-md
+          go build -trimpath -ldflags="-s -w -X main.version=$BUILD_VERSION" -o "dist/xmind-md-$GOOS-$GOARCH$suffix" ./cmd/xmind-md
       - uses: actions/upload-artifact@v4
         with:
           name: xmind-md-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
+          if-no-files-found: error
